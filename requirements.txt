@@ -1,0 +1,15 @@
+# requirements.txt (v2)
+ultralytics>=8.0.0        # YOLOv8
+opencv-python>=4.8.0      # Video isleme
+numpy>=1.24.0             # Temel hesaplamalar
+torch>=2.0.0              # MLP egitimi + inference
+streamlit>=1.28.0         # Dashboard
+pyyaml>=6.0               # Konfigurasyon
+lap>=0.4.0                # ByteTrack linear assignment
+scipy>=1.10.0             # ByteTrack / tracking utils
+scikit-learn>=1.3.0       # RF alternatifi / metrikler
+pandas>=2.0.0             # Veri isleme
+Pillow>=10.0.0            # Goruntu isleme
+plotly>=5.15.0            # Dashboard grafikleri
+filterpy>=1.4.5           # Kalman filtre (ByteTrack)
+# deep-sort-realtime      # Opsiyonel fallback

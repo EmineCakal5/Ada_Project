@@ -1,0 +1,76 @@
+# Davranissal Guvenlik Analiz Sistemi - Ana Konfigurasyon
+# v2.0 - Sabit Guvenlik Kamerasi Perspektifi
+
+# ─── Detector ─────────────────────────────────────────────
+detector:
+  model: "yolov8s.pt"          # yolov8n / yolov8s / yolov8m
+  confidence: 0.4
+  iou_threshold: 0.45
+  device: "cpu"                 # "cpu" veya "cuda"
+  classes: [0, 1, 2, 3, 5, 7, 24, 26, 28]  # person, vehicles, backpack, handbag, suitcase
+  imgsz: 640
+
+# ─── Tracker ──────────────────────────────────────────────
+tracker:
+  type: "bytetrack"            # "bytetrack" veya "deepsort"
+  bytetrack:
+    track_thresh: 0.5
+    track_buffer: 30
+    match_thresh: 0.8
+    frame_rate: 15
+  deepsort:
+    max_dist: 0.2
+    max_age: 30
+    n_init: 3
+    nn_budget: 100
+
+# ─── Davranis Motoru ──────────────────────────────────────
+behavior:
+  zones_file: "config/zones.json"
+
+  loitering:
+    threshold_seconds: 60      # Kac saniyeden fazla bekleme anormal
+    min_displacement: 50       # Piksel: bu altinda hareket "duruyor" sayilir
+
+  abandoned_object:
+    owner_distance: 150        # Piksel: sahibi bu kadar uzaklasirsa nesne "terk edildi"
+    confirm_seconds: 10        # Kac saniye sonra alarm verilir
+
+  threat_scorer:
+    weights:
+      zone_violation: 0.35
+      loitering: 0.25
+      abandoned_object: 0.30
+      velocity_anomaly: 0.10
+
+# ─── MLP Siniflandirici ───────────────────────────────────
+mlp:
+  input_dim: 8
+  hidden_dims: [32, 16]
+  output_dim: 4               # LOW / MEDIUM / HIGH / CRITICAL
+  model_path: "models/weights/threat_mlp.pt"
+  threshold_train: 200        # Sentetik ornek sayisi
+
+# ─── Dashboard ────────────────────────────────────────────
+dashboard:
+  title: "Davranissal Guvenlik Analiz Sistemi"
+  port: 8501
+  frame_width: 960
+  frame_height: 540
+  max_alerts: 50
+  fps_display: true
+  replay_mode: true
+  scenarios_dir: "data/scenarios"
+
+# ─── Video ────────────────────────────────────────────────
+video:
+  source: 0                    # 0 = webcam, veya dosya yolu
+  test_video: "data/test_videos/test.mp4"
+  output_dir: "data/output"
+  record: false
+
+# ─── Loglama ──────────────────────────────────────────────
+logging:
+  level: "INFO"                # DEBUG / INFO / WARNING
+  save_alerts: true
+  alerts_file: "data/output/alerts.json"
