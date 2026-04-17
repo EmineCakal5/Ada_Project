@@ -124,3 +124,24 @@ class LoiteringDetector:
         if track_id not in self._states:
             return 0.0
         return time.time() - self._states[track_id]["stationary_start"]
+
+    # ------------------------------------------------------------------
+    # GMC (drone/IHA) — anchor noktalarini kamera hareketine gore kaydir
+    # ------------------------------------------------------------------
+    def apply_camera_motion(self, H) -> None:
+        """
+        Loitering anchor'lari ekran koordinatinda saklanir; kamera
+        kaydiginda bu noktalar da warp edilmeli, aksi halde aslinda
+        sabit duran bir yaya "hareket ediyormus" gibi algilanir ve
+        anchor surekli yenilenir (loitering alarmi hiç tetiklenmez).
+        """
+        if H is None or not self._states:
+            return
+        Hf = np.asarray(H, dtype=np.float32)
+        if Hf.shape != (2, 3):
+            return
+        for state in self._states.values():
+            ax, ay = state["anchor"]
+            nx = Hf[0, 0] * ax + Hf[0, 1] * ay + Hf[0, 2]
+            ny = Hf[1, 0] * ax + Hf[1, 1] * ay + Hf[1, 2]
+            state["anchor"] = (float(nx), float(ny))

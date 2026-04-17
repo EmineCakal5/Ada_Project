@@ -30,7 +30,41 @@ class Zone:
         raw_pts = np.array(zone_data["points"], dtype=np.float32)
         scale_x = frame_w / ref_w
         scale_y = frame_h / ref_h
-        self.points = (raw_pts * [scale_x, scale_y]).astype(np.int32)
+        scaled = (raw_pts * [scale_x, scale_y]).astype(np.float32)
+
+        # Dinamik bolgeler icin iki kopyayi da tutuyoruz:
+        #   * self.points       -> ekranda cizim ve pointPolygonTest icin
+        #                          kullanilan GUNCEL (kamera hareketi ile
+        #                          her frame warp edilen) poligon.
+        #   * self._points_f    -> ayni verinin float hali; hassas warp zinciri
+        #                          boyunca yuvarlama hatalarini onler.
+        self._points_f: np.ndarray = scaled.copy()
+        self.points: np.ndarray = scaled.astype(np.int32)
+
+    # ------------------------------------------------------------------
+    # Dinamik bolge (GMC) — drone / IHA kamerasi icin
+    # ------------------------------------------------------------------
+    def update_polygon(self, transform_matrix: np.ndarray) -> None:
+        """
+        Kamera hareketi 2x3 affine matrisi ile bolge noktalarini warp eder.
+        Boylece bolge ekran koordinatinda kayar ama yeryuzunde (arka planda)
+        sabit kalmis gibi gorunur.
+
+        Args:
+            transform_matrix: 2x3 float32 affine (EgoMotionCompensator ciktisi).
+                              None veya identity verilirse no-op.
+        """
+        if transform_matrix is None:
+            return
+        H = np.asarray(transform_matrix, dtype=np.float32)
+        if H.shape != (2, 3):
+            return
+
+        # cv2.transform (N, 1, 2) sekline ihtiyaç duyar
+        pts_in = self._points_f.reshape(-1, 1, 2)
+        pts_out = cv2.transform(pts_in, H)
+        self._points_f = pts_out.reshape(-1, 2).astype(np.float32)
+        self.points = self._points_f.astype(np.int32)
 
     def contains_point(self, point: Tuple[float, float]) -> bool:
         """Nokta bu bölge içinde mi? (cv2.pointPolygonTest)"""
@@ -39,19 +73,42 @@ class Zone:
         return result >= 0
 
     def draw(self, frame: np.ndarray) -> np.ndarray:
-        """Bölgeyi frame üzerine şeffaf olarak çiz."""
+        """Bolgeyi frame uzerine seffaf olarak ciz + dinamik (ground-lock)
+        capa isaretleri (HUD hissiyati)."""
         overlay = frame.copy()
         cv2.fillPoly(overlay, [self.points], self.color)
         cv2.addWeighted(overlay, self.alpha, frame, 1 - self.alpha, 0, frame)
 
-        # Sınır çizgisi
+        # Sinir cizgisi
         border_color = tuple(max(0, c - 50) for c in self.color)
-        cv2.polylines(frame, [self.points], isClosed=True, color=border_color, thickness=2)
+        cv2.polylines(frame, [self.points], isClosed=True,
+                      color=border_color, thickness=2)
 
-        # Bölge ismi
+        # --- Dinamik kose capa (+) isaretleri: zone'in yeryuzune kilitli
+        # oldugunu gorsel olarak belli eder. Kamera kaydikca bu '+' larin
+        # sahnedeki ayni piksel referansinda kaldigi izlenir.
+        anchor_color = (255, 220, 0)   # #00dcff neon mavi (BGR)
+        arm = 5
+        for pt in self.points:
+            x, y = int(pt[0]), int(pt[1])
+            cv2.line(frame, (x - arm, y), (x + arm, y), anchor_color, 1, cv2.LINE_AA)
+            cv2.line(frame, (x, y - arm), (x, y + arm), anchor_color, 1, cv2.LINE_AA)
+            cv2.circle(frame, (x, y), 2, anchor_color, -1, cv2.LINE_AA)
+
+        # --- Merkez capa: kucuk hedef halkasi + isim etiketi
         centroid = self.points.mean(axis=0).astype(int)
-        cv2.putText(frame, self.name, tuple(centroid),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+        cx, cy = int(centroid[0]), int(centroid[1])
+        cv2.circle(frame, (cx, cy), 6, anchor_color, 1, cv2.LINE_AA)
+        cv2.line(frame, (cx - 9, cy), (cx - 3, cy), anchor_color, 1, cv2.LINE_AA)
+        cv2.line(frame, (cx + 3, cy), (cx + 9, cy), anchor_color, 1, cv2.LINE_AA)
+        cv2.line(frame, (cx, cy - 9), (cx, cy - 3), anchor_color, 1, cv2.LINE_AA)
+        cv2.line(frame, (cx, cy + 3), (cx, cy + 9), anchor_color, 1, cv2.LINE_AA)
+
+        # Isim (uppercase, teknik)
+        label = f"◈ {self.name.upper()}"
+        cv2.putText(frame, label, (cx + 12, cy + 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42,
+                    (255, 255, 255), 1, cv2.LINE_AA)
         return frame
 
 
@@ -146,3 +203,14 @@ class ZoneViolationDetector:
 
     def get_all_zones(self) -> List[Zone]:
         return self.zones
+
+    def apply_camera_motion(self, transform_matrix: np.ndarray) -> None:
+        """
+        Kamera hareket matrisi geldiginde tum zone poligonlarini dinamik
+        olarak yeryuzune sabitlenmis gibi kaydir. Drone / IHA senaryosunda
+        BehaviorEngine tarafindan cagrilir.
+        """
+        if transform_matrix is None:
+            return
+        for zone in self.zones:
+            zone.update_polygon(transform_matrix)

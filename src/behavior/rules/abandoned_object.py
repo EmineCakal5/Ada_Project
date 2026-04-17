@@ -137,6 +137,28 @@ class AbandonedObjectDetector:
         elapsed = time.time() - state["candidate_since"]
         return min(elapsed / (self.confirm_seconds * 3), 1.0)
 
+    # ------------------------------------------------------------------
+    # GMC (drone/IHA) — sabit nesne referans noktalarini warp et
+    # ------------------------------------------------------------------
+    def apply_camera_motion(self, H) -> None:
+        """
+        AbandonedObjectDetector, her sabit nesnenin son gordugu merkezi
+        `state["center"]` olarak tutar. Kamera kaydiginda bu merkez de
+        warp edilmeli; aksi halde asla hareket etmemis bir çanta bile
+        "hareket etti" olarak damgalanir, aday state sifirlanir ve alarm
+        hiç çalmaz.
+        """
+        if H is None or not self._object_states:
+            return
+        Hf = np.asarray(H, dtype=np.float32)
+        if Hf.shape != (2, 3):
+            return
+        for state in self._object_states.values():
+            cx, cy = state["center"]
+            nx = Hf[0, 0] * cx + Hf[0, 1] * cy + Hf[0, 2]
+            ny = Hf[1, 0] * cx + Hf[1, 1] * cy + Hf[1, 2]
+            state["center"] = (float(nx), float(ny))
+
     @staticmethod
     def _nearest_person_distance(center: Tuple, persons: List) -> float:
         """En yakın kişiye olan mesafeyi döner."""

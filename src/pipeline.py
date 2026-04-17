@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.detector.yolo_detector import YOLODetector
 from src.tracker.bytetrack_tracker import ByteTracker
 from src.tracker.track_history import TrackHistory
+from src.tracker.ego_motion import EgoMotionCompensator
 from src.behavior.engine import BehaviorEngine
 from src.dashboard.visualizer import Visualizer
 from src.dashboard.alert_system import AlertSystem
@@ -53,6 +54,21 @@ class Pipeline:
         self.engine    = BehaviorEngine(config)
         self.visualizer = Visualizer(config)
         self.alert_sys  = AlertSystem(config)
+
+        # ─── Ego-Motion (Drone / IHA) ─────────────────────────────
+        # Sabit kamera modunda enabled=false birakilabilir, ekstra yuk olmaz.
+        ego_cfg = (config.get("tracker", {}) or {}).get("ego_motion", {}) or {}
+        self.ego_enabled: bool = bool(ego_cfg.get("enabled", False))
+        if self.ego_enabled:
+            self.ego = EgoMotionCompensator(
+                downscale=float(ego_cfg.get("downscale", 0.5)),
+                max_features=int(ego_cfg.get("max_features", 500)),
+                grid=tuple(ego_cfg.get("grid", [4, 4])),
+                ransac_thresh=float(ego_cfg.get("ransac_thresh", 3.0)),
+            )
+            logger.info("Ego-Motion (GMC) aktif — drone/IHA modu")
+        else:
+            self.ego = None
 
         # Tracker'a sınıf isimlerini ver
         if hasattr(self.detector, 'model') and hasattr(self.detector.model, 'names'):
@@ -116,6 +132,8 @@ class Pipeline:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     self.history.clear()
                     self.tracker.reset()
+                    if self.ego is not None:
+                        self.ego.reset()
                     continue
 
                 self.frame_no += 1
@@ -124,11 +142,26 @@ class Pipeline:
                 if orig_w != target_w or orig_h != target_h:
                     frame = cv2.resize(frame, (target_w, target_h))
 
+                # ─── 0. EGO-MOTION (Drone / IHA) ──────
+                # Sabit kamerada ego=None -> bu blok no-op. Hareketli
+                # kamerada tum state'ler yeni frame'e hizalanir ve boylece
+                # ID switch / yanlis loitering / yanlis zone ihlali onlenir.
+                H = None
+                if self.ego is not None:
+                    H = self.ego.estimate(frame)
+                    # Onemli: tracker.update() icinde predict() oncesi de
+                    # Kalman state'leri warp edilir (transform parametresi
+                    # asagida geciliyor). Burada ise track gecmisi ve
+                    # davranis kurallari (zone/loitering/abandoned) senkron
+                    # edilir.
+                    self.history.apply_camera_motion(H)
+                    self.engine.apply_camera_motion(H)
+
                 # ─── 1. TESPIT ────────────────────────
                 detections = self.detector.detect(frame)
 
                 # ─── 2. TAKIP ─────────────────────────
-                tracks = self.tracker.update(detections, frame)
+                tracks = self.tracker.update(detections, frame, transform=H)
 
                 # Track history güncelle
                 active_ids = []
@@ -175,6 +208,8 @@ class Pipeline:
                         logger.info("Tracker sıfırlandı.")
                         self.history.clear()
                         self.tracker.reset()
+                        if self.ego is not None:
+                            self.ego.reset()
 
         except KeyboardInterrupt:
             logger.info("Durduruldu.")

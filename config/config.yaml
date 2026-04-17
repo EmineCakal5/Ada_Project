@@ -24,6 +24,15 @@ tracker:
     n_init: 3
     nn_budget: 100
 
+  # Ego-Motion / Global Motion Compensation (Drone & IHA modu)
+  # Sabit kamera icin enabled: false birakin — ekstra CPU yuku olmaz.
+  ego_motion:
+    enabled: true              # Drone/IHA: true, sabit kamera: false
+    downscale: 0.5             # Jetson icin 0.5 onerilir (2-3x hizlanma)
+    max_features: 500          # Daha az = daha hizli; daha fazla = daha stabil
+    grid: [4, 4]               # Feature'lari homojen dagitmak icin grid
+    ransac_thresh: 3.0         # RANSAC piksel reprojection esigi
+
 # ─── Davranis Motoru ──────────────────────────────────────
 behavior:
   zones_file: "config/zones.json"

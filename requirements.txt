@@ -12,4 +12,6 @@ pandas>=2.0.0             # Veri isleme
 Pillow>=10.0.0            # Goruntu isleme
 plotly>=5.15.0            # Dashboard grafikleri
 filterpy>=1.4.5           # Kalman filtre (ByteTrack)
+albumentations>=1.4.0     # Drone perspektifi icin veri artirma (MotionBlur, Perspective, vb.)
+tqdm>=4.65.0              # VisDrone donusum ilerleme cubugu
 # deep-sort-realtime      # Opsiyonel fallback

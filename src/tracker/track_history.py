@@ -88,6 +88,50 @@ class TrackInfo:
         if alert_type not in self.alerts:
             self.alerts.append(alert_type)
 
+    # ------------------------------------------------------------------
+    # GMC (drone/IHA) — kamera hareketi varken geçmiş noktaları warp et
+    # ------------------------------------------------------------------
+    def apply_camera_motion(self, H: np.ndarray) -> None:
+        """
+        Kamera ego-motion matrisi ile trajectory, center ve bbox'i yeni
+        frame koordinat sistemine tasi. Bu sayede loitering / velocity /
+        displacement gibi davranissal metrikler kamera kaymasindan
+        etkilenmez (yeryuzune sabitlenmis gibi).
+
+        Args:
+            H: 2x3 float32 affine matris.
+        """
+        if H is None:
+            return
+        import cv2
+        Hf = np.asarray(H, dtype=np.float32)
+        if Hf.shape != (2, 3):
+            return
+
+        # ---- Trajectory geçmişi ----
+        if len(self.trajectory) > 0:
+            pts = np.array(self.trajectory, dtype=np.float32).reshape(-1, 1, 2)
+            warped = cv2.transform(pts, Hf).reshape(-1, 2)
+            # deque'un maxlen'ini koruyarak yeniden doldur
+            self.trajectory.clear()
+            for p in warped:
+                self.trajectory.append((float(p[0]), float(p[1])))
+
+        # ---- Merkez (son pozisyon) ----
+        cx, cy = self.center
+        new_cx = Hf[0, 0] * cx + Hf[0, 1] * cy + Hf[0, 2]
+        new_cy = Hf[1, 0] * cx + Hf[1, 1] * cy + Hf[1, 2]
+        self.center = (float(new_cx), float(new_cy))
+
+        # ---- Bbox köşeleri ----
+        x1, y1, x2, y2 = self.bbox
+        corners = np.array([[x1, y1], [x2, y2]], dtype=np.float32).reshape(-1, 1, 2)
+        warped = cv2.transform(corners, Hf).reshape(-1, 2)
+        self.bbox = [
+            float(warped[0, 0]), float(warped[0, 1]),
+            float(warped[1, 0]), float(warped[1, 1]),
+        ]
+
     def to_dict(self) -> dict:
         """JSON serializable dict döner."""
         return {
@@ -176,3 +220,21 @@ class TrackHistory:
         self.tracks.clear()
         self.lost_tracks.clear()
         self._lost_counters.clear()
+
+    # ------------------------------------------------------------------
+    # GMC (drone/IHA) — tum aktif track geçmişlerine warp uygula
+    # ------------------------------------------------------------------
+    def apply_camera_motion(self, H: np.ndarray) -> None:
+        """
+        Kamera hareketi varken hem aktif hem kayip track'lerin trajectory
+        ve anchor verilerini tek noktadan warp eder. Pipeline tracker
+        update'inden ONCE cagirmalidir.
+        """
+        if H is None:
+            return
+        for t in self.tracks.values():
+            t.apply_camera_motion(H)
+        # Kayıp track'ler de aynı uzayda tutulmalı ki geri yakalandığında
+        # trajectory'si tutarlı olsun:
+        for t in self.lost_tracks.values():
+            t.apply_camera_motion(H)

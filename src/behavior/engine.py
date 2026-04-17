@@ -98,6 +98,24 @@ class BehaviorEngine:
                 logger.warning(f"MLP yüklenemedi, rule-based kullanılacak: {e}")
         return self.mlp
 
+    # ------------------------------------------------------------------
+    # GMC (drone / IHA) — tum davranis alt modullerine tek noktadan yay
+    # ------------------------------------------------------------------
+    def apply_camera_motion(self, H) -> None:
+        """
+        Pipeline her frame'de EgoMotionCompensator'dan gelen 2x3 affine
+        matrisi bu metoda verir. BehaviorEngine da zone poligonlarini,
+        loitering anchor'larini ve abandoned-object merkezlerini bu
+        matrise gore senkronize eder. Boylece kurallar kamera hareketli
+        iken dahi "yeryuzune sabitlenmis" gibi davranir.
+        """
+        if H is None:
+            return
+        if self.zone_detector is not None:
+            self.zone_detector.apply_camera_motion(H)
+        self.loitering.apply_camera_motion(H)
+        self.abandoned.apply_camera_motion(H)
+
     def process(self, track_history: TrackHistory,
                 frame_w: int, frame_h: int) -> Tuple[List[Alert], Dict]:
         """

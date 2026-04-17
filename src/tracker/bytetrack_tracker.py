@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import List, Tuple, Optional
 import logging
 
+from src.tracker.ego_motion import decompose_affine
+
 logger = logging.getLogger(__name__)
 
 # ─── Kalman Filtresi ──────────────────────────────────────────
@@ -80,6 +82,64 @@ class KalmanBoxTracker:
 
     def get_state(self) -> np.ndarray:
         return self._cxcywh_to_xyxy(self.kf.x[:4].flatten())
+
+    # ------------------------------------------------------------------
+    # GMC (Global Motion Compensation) — drone / IHA kamerasi icin
+    # ------------------------------------------------------------------
+    def apply_camera_motion(self, H: np.ndarray) -> None:
+        """
+        Kamera (ego) hareketi tespit edildiginde Kalman state'ini yeni
+        frame'e hizala. Bu, kamera kaydiginda ID Switch olmasini engeller.
+
+        Mantik:
+            * (cx, cy) merkezine affine uygulanir.
+            * (w, h) uniform scale ile carpilir (kamera zoom / irtifa
+              degisimi senaryosu).
+            * (vx, vy) hizina rotation+scale (A kismi) uygulanir; translation
+              degil, zira translation bir hiz degil, tek sefer oteleme.
+            * (vw, vh) boyut hiz terimleri de ayni scale ile olceklenir.
+
+        Args:
+            H: 2x3 float32 affine matris (EgoMotionCompensator.estimate).
+        """
+        if H is None:
+            return
+
+        A = H[:, :2].astype(float)           # rotasyon + olcek kismi
+        t = H[:, 2].astype(float)            # oteleme kismi
+        scale, _ = decompose_affine(H)
+
+        x = self.kf.x.flatten().copy()       # state (8,)
+
+        # Merkez: affine ile warp
+        cx_new = A[0, 0] * x[0] + A[0, 1] * x[1] + t[0]
+        cy_new = A[1, 0] * x[0] + A[1, 1] * x[1] + t[1]
+
+        # Boyut: uniform scale
+        w_new = x[2] * scale
+        h_new = x[3] * scale
+
+        # Hiz: sadece rotasyon + scale (oteleme hizi degistirmez)
+        vx_new = A[0, 0] * x[4] + A[0, 1] * x[5]
+        vy_new = A[1, 0] * x[4] + A[1, 1] * x[5]
+        vw_new = x[6] * scale
+        vh_new = x[7] * scale
+
+        self.kf.x = np.array(
+            [cx_new, cy_new, w_new, h_new, vx_new, vy_new, vw_new, vh_new],
+            dtype=float,
+        ).reshape(-1, 1)
+
+        # Kovaryans da benzer donusum gerektirir. Tam dogru matematik:
+        # P' = M P M^T  (M: 8x8 blok-diagonal [A,A,A,A]).
+        # Basit ve stabil yaklasim: P'yi hafifce sisir, kamera hareketine
+        # bagli belirsizligi temsil etsin. Jetson'da matris carpim maliyetini
+        # de dusurur.
+        self.kf.P[:2, :2] *= (scale * scale)     # merkez konum belirsizligi
+        self.kf.P[2:4, 2:4] *= (scale * scale)   # boyut belirsizligi
+        # Ek kamera-kaynakli gurultu (ortalama 2 piksel std^2)
+        self.kf.P[0, 0] += 4.0
+        self.kf.P[1, 1] += 4.0
 
     @staticmethod
     def _xyxy_to_cxcywh(bbox):
@@ -155,20 +215,32 @@ class ByteTracker:
     def set_class_names(self, names: dict):
         self.class_names = names
 
-    def update(self, detections, frame: np.ndarray = None) -> List[Track]:
+    def update(self, detections, frame: np.ndarray = None,
+               transform: Optional[np.ndarray] = None) -> List[Track]:
         """
-        Detections listesini alır, Track listesi döner.
+        Detections listesini alir, Track listesi doner.
 
         Args:
-            detections: List[Detection] — yolo_detector çıktısı
-            frame: opsiyonel, gelecekteki Re-ID için
+            detections: List[Detection] — yolo_detector ciktisi
+            frame: opsiyonel, gelecekteki Re-ID icin
+            transform: opsiyonel 2x3 affine matris (EgoMotionCompensator ciktisi).
+                       Kamera hareketli ise (drone/IHA), Kalman state'leri
+                       predict() oncesi bu matrise gore warp edilir. None ise
+                       sabit kamera modu (mevcut davranis) korunur.
 
         Returns:
             List[Track] — aktif track'ler
         """
         self.frame_count += 1
 
-        # Detection'ları iki gruba ayır
+        # ─── GMC: Kalman state'lerini yeni frame'e hizala ─────
+        # Onemli: predict()'ten ONCE uygulanmali ki F*x sonrasi olusan
+        # beklenen pozisyon zaten warp edilmis kordinat sisteminde olsun.
+        if transform is not None:
+            for trk in self.trackers:
+                trk.apply_camera_motion(transform)
+
+        # Detection'lari iki gruba ayir
         high_det = [d for d in detections if d.confidence >= self.track_thresh]
         low_det = [d for d in detections if d.confidence < self.track_thresh]
 

@@ -27,6 +27,7 @@ sys.path.insert(0, ROOT)
 from src.detector.yolo_detector import YOLODetector
 from src.tracker.bytetrack_tracker import ByteTracker
 from src.tracker.track_history import TrackHistory
+from src.tracker.ego_motion import EgoMotionCompensator, decompose_affine
 from src.behavior.engine import BehaviorEngine
 from src.dashboard.visualizer import Visualizer
 from src.dashboard.alert_system import AlertSystem
@@ -220,7 +221,19 @@ def init_components(_config):
     visualizer = Visualizer(_config)
     alert_sys  = AlertSystem(_config)
     replay    = ReplayManager(_config)
-    return detector, tracker, history, engine, visualizer, alert_sys, replay
+
+    # Ego-Motion (GMC) — drone/IHA modu icin; sabit kamera modunda None kalir
+    ego_cfg = (_config.get("tracker", {}) or {}).get("ego_motion", {}) or {}
+    if ego_cfg.get("enabled", False):
+        ego = EgoMotionCompensator(
+            downscale=float(ego_cfg.get("downscale", 0.5)),
+            max_features=int(ego_cfg.get("max_features", 500)),
+            grid=tuple(ego_cfg.get("grid", [4, 4])),
+            ransac_thresh=float(ego_cfg.get("ransac_thresh", 3.0)),
+        )
+    else:
+        ego = None
+    return detector, tracker, history, engine, visualizer, alert_sys, replay, ego
 
 
 # ─── Session State ────────────────────────────────────────────
@@ -260,8 +273,31 @@ def render_header():
 
 # ─── Metrik Kartlar ───────────────────────────────────────────
 
-def render_metrics(alert_sys: AlertSystem, fps: float, track_count: int):
+def render_metrics(alert_sys: AlertSystem, fps: float, track_count: int,
+                   extra_info: dict = None):
+    """Alt metrik seridi. GMC / Drone modunda kamera sapmasi ve GMC
+    durumunu da canli olarak gosterir."""
     stats = alert_sys.get_stats()
+
+    info = extra_info or {}
+    gmc_active = bool(info.get("gmc_active"))
+    dx = float(info.get("ego_dx", 0.0))
+    dy = float(info.get("ego_dy", 0.0))
+    drift_mag = (dx * dx + dy * dy) ** 0.5
+
+    # GMC status gorsel durumu
+    if gmc_active:
+        gmc_label = "ACTIVE"
+        gmc_color = "#00ffa5"  # siber yesil
+        gmc_dot   = "● "
+    else:
+        gmc_label = "OFFLINE"
+        gmc_color = "#859397"
+        gmc_dot   = "○ "
+
+    # Ciddi sapma rengi (> ~3 px/frame dikkatli)
+    drift_color = "#00dcff" if drift_mag < 3.0 else "#ffaa00"
+
     st.markdown(f"""
     <div class="metrics-footer">
         <div class="metric-box">
@@ -271,6 +307,17 @@ def render_metrics(alert_sys: AlertSystem, fps: float, track_count: int):
         <div class="metric-box">
             <label>FPS Rate</label>
             <span class="metric-val" style="color: #e2e2e9;">{fps:.1f}</span>
+        </div>
+        <div class="metric-box">
+            <label>Camera Drift (px)</label>
+            <span class="metric-val" style="color: {drift_color};">{drift_mag:.2f}</span>
+            <span style="font-family:'Space Grotesk';font-size:0.6rem;color:#bac9ce;letter-spacing:0.1em;">
+                dx {dx:+.2f} &nbsp; dy {dy:+.2f}
+            </span>
+        </div>
+        <div class="metric-box">
+            <label>GMC Status</label>
+            <span class="metric-val" style="color: {gmc_color};font-size:1.3rem;">{gmc_dot}{gmc_label}</span>
         </div>
         <div class="metric-box">
             <label>Critical Alerts</label>
@@ -429,7 +476,7 @@ def render_threat_chart(history: list):
 def main():
     init_state()
     config = load_config()
-    detector, tracker, history, engine, visualizer, alert_sys, replay = init_components(config)
+    detector, tracker, history, engine, visualizer, alert_sys, replay, ego = init_components(config)
 
     render_header()
 
@@ -487,12 +534,19 @@ def main():
             fps_counter_times = []
 
             frame_count = 0
+            # Ego-motion kisa vadeli ortalama: HUD/metrikler icin stabil gozukur
+            ego_dx_hist, ego_dy_hist = [], []
+            if ego is not None:
+                ego.reset()
+
             while st.session_state.running:
                 ret, frame = cap.read()
                 if not ret:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     history.clear()
                     tracker.reset()
+                    if ego is not None:
+                        ego.reset()
                     continue
 
                 frame_count += 1
@@ -501,9 +555,23 @@ def main():
                 # Boyut ayarla
                 frame = cv2.resize(frame, (target_w, target_h))
 
-                # Pipeline
+                # 0. EGO-MOTION (Drone/IHA). Sabit kamera modunda no-op.
+                H = None
+                ego_dx = ego_dy = 0.0
+                ego_rot_deg = 0.0
+                ego_scale = 1.0
+                if ego is not None:
+                    H = ego.estimate(frame)
+                    ego_dx = float(H[0, 2])
+                    ego_dy = float(H[1, 2])
+                    ego_scale, rot_rad = decompose_affine(H)
+                    ego_rot_deg = float(np.degrees(rot_rad))
+                    history.apply_camera_motion(H)
+                    engine.apply_camera_motion(H)
+
+                # 1. Pipeline
                 detections = detector.detect(frame)
-                tracks = tracker.update(detections, frame)
+                tracks = tracker.update(detections, frame, transform=H)
 
                 active_ids = []
                 for t in tracks:
@@ -512,7 +580,7 @@ def main():
                     active_ids.append(t.track_id)
                 history.mark_missing(active_ids)
 
-                # Zone overlay
+                # Zone overlay (dinamik capa isaretleriyle birlikte)
                 if engine.zone_detector:
                     frame = engine.zone_detector.draw_zones(frame)
 
@@ -525,7 +593,20 @@ def main():
                 fps_counter_times = fps_counter_times[-30:]
                 fps = (len(fps_counter_times)-1)/max(fps_counter_times[-1]-fps_counter_times[0], 1e-6) if len(fps_counter_times) > 1 else 0
 
-                extra = {"scenario": scenario_name}
+                # Ego-motion ortalamasi (son ~15 frame) — HUD titremesin diye
+                ego_dx_hist.append(ego_dx); ego_dy_hist.append(ego_dy)
+                ego_dx_hist = ego_dx_hist[-15:]; ego_dy_hist = ego_dy_hist[-15:]
+                ego_dx_avg = float(np.mean(ego_dx_hist)) if ego_dx_hist else 0.0
+                ego_dy_avg = float(np.mean(ego_dy_hist)) if ego_dy_hist else 0.0
+
+                extra = {
+                    "scenario":    scenario_name,
+                    "gmc_active":  ego is not None,
+                    "ego_dx":      ego_dx_avg,
+                    "ego_dy":      ego_dy_avg,
+                    "ego_rot_deg": ego_rot_deg,
+                    "ego_scale":   ego_scale,
+                }
                 frame_out = visualizer.render(frame, history, alerts, per_track, extra)
 
                 # Threat history
@@ -544,7 +625,7 @@ def main():
                     render_alerts(alert_sys)
 
                 with metric_placeholder:
-                    render_metrics(alert_sys, fps, history.count_active())
+                    render_metrics(alert_sys, fps, history.count_active(), extra)
 
             cap.release()
             alert_sys.force_save()
@@ -560,7 +641,9 @@ def main():
             render_alerts(alert_sys)
 
         with metric_placeholder:
-            render_metrics(alert_sys, 0.0, 0)
+            render_metrics(alert_sys, 0.0, 0,
+                           extra_info={"gmc_active": ego is not None,
+                                       "ego_dx": 0.0, "ego_dy": 0.0})
 
 
 if __name__ == "__main__":

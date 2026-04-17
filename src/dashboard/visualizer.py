@@ -17,6 +17,13 @@ FONT_SMALL  = 0.45
 FONT_MEDIUM = 0.6
 FONT_LARGE  = 0.8
 
+# SENTINEL HUD paleti (BGR) — havacilik / uzay teknik konsol hissiyati
+HUD_NEON    = (255, 220,   0)  # #00dcff neon mavi
+HUD_CYBER   = (165, 255,   0)  # #00ffa5 siber yesil
+HUD_AMBER   = (  0, 170, 255)  # #ffaa00 uyari ambarli
+HUD_DIM     = (180, 180, 180)
+HUD_LINE    = (120, 120, 140)
+
 
 class FPSCounter:
     """Kayan pencere ile gerçek zamanlı FPS hesaplar."""
@@ -77,7 +84,10 @@ class Visualizer:
         """
         self.fps_counter.tick()
         frame = self._draw_tracks(frame, track_history, per_track)
+        # HUD katmani: crosshair + ust telemetri + sag alt GMC kutusu
+        frame = self._draw_crosshair(frame)
         frame = self._draw_status_bar(frame, track_history, extra_info)
+        frame = self._draw_gmc_hud(frame, extra_info)
         frame = self._draw_alert_panel(frame, alerts)
         return frame
 
@@ -146,37 +156,148 @@ class Visualizer:
         cv2.line(frame, (x2, y2), (x2 - corner_len, y2), color, thickness)
         cv2.line(frame, (x2, y2), (x2, y2 - corner_len), color, thickness)
 
-    def _draw_status_bar(self, frame: np.ndarray, track_history, extra_info: dict = None) -> np.ndarray:
-        """Üst durum çubuğu: başlık, FPS, track sayısı."""
+    # ------------------------------------------------------------------
+    # SENTINEL HUD — Ust telemetri seridi (uzay/havacilik hissiyati)
+    # ------------------------------------------------------------------
+    def _draw_status_bar(self, frame: np.ndarray, track_history,
+                         extra_info: dict = None) -> np.ndarray:
+        """Ust HUD serit: baslik, FPS, track sayisi, GMC gostergesi, senaryo."""
         h, w = frame.shape[:2]
-        bar_h = 36
+        bar_h = 40
 
-        # Yarı saydam arka plan
+        # Yari saydam siyah + alt cizgi (neon mavi tiktrack)
         overlay = frame.copy()
-        cv2.rectangle(overlay, (0, 0), (w, bar_h), (15, 15, 25), -1)
-        cv2.addWeighted(overlay, 0.8, frame, 0.2, 0, frame)
+        cv2.rectangle(overlay, (0, 0), (w, bar_h), (10, 12, 18), -1)
+        cv2.addWeighted(overlay, 0.82, frame, 0.18, 0, frame)
+        cv2.line(frame, (0, bar_h), (w, bar_h), HUD_NEON, 1)
 
-        # Başlık
-        cv2.putText(frame, "◉ " + self.title, (10, 24),
-                    FONT, FONT_MEDIUM, (0, 220, 255), 1, cv2.LINE_AA)
+        # Sol: baslik + "SENTINEL" mimikeri
+        cv2.putText(frame, "[ SENTINEL ] " + self.title, (10, 26),
+                    FONT, FONT_MEDIUM, HUD_NEON, 1, cv2.LINE_AA)
 
-        # FPS
-        if self.show_fps:
-            fps_text = f"FPS: {self.fps_counter.fps:.1f}"
-            cv2.putText(frame, fps_text, (w - 120, 24),
-                        FONT, FONT_MEDIUM, (100, 255, 100), 1, cv2.LINE_AA)
-
-        # Track sayısı
-        n_tracks = track_history.count_active()
-        track_text = f"Tracks: {n_tracks}"
-        cv2.putText(frame, track_text, (w - 240, 24),
-                    FONT, FONT_MEDIUM, (200, 200, 200), 1, cv2.LINE_AA)
-
-        # Senaryo modu
+        # Orta: senaryo etiketi (varsa)
         if extra_info and extra_info.get("scenario"):
-            scn = f"▶ {extra_info['scenario']}"
-            cv2.putText(frame, scn, (w // 2 - 100, 24),
-                        FONT, FONT_MEDIUM, (0, 255, 200), 1, cv2.LINE_AA)
+            scn = f"> MISSION: {extra_info['scenario']}"
+            cv2.putText(frame, scn, (w // 2 - 120, 26),
+                        FONT, FONT_MEDIUM, HUD_CYBER, 1, cv2.LINE_AA)
+
+        # Sag: GMC durum rozeti + tracks + FPS
+        x = w - 10
+        if self.show_fps:
+            fps_txt = f"FPS {self.fps_counter.fps:4.1f}"
+            (tw, _), _ = cv2.getTextSize(fps_txt, FONT, FONT_MEDIUM, 1)
+            x -= tw
+            cv2.putText(frame, fps_txt, (x, 26),
+                        FONT, FONT_MEDIUM, HUD_CYBER, 1, cv2.LINE_AA)
+            x -= 18
+
+        n_tracks = track_history.count_active()
+        trk_txt = f"TRK {n_tracks:02d}"
+        (tw, _), _ = cv2.getTextSize(trk_txt, FONT, FONT_MEDIUM, 1)
+        x -= tw
+        cv2.putText(frame, trk_txt, (x, 26),
+                    FONT, FONT_MEDIUM, HUD_DIM, 1, cv2.LINE_AA)
+        x -= 18
+
+        # GMC rozeti
+        gmc_active = bool(extra_info and extra_info.get("gmc_active"))
+        badge = "GMC ACTIVE" if gmc_active else "GMC OFF"
+        badge_color = HUD_NEON if gmc_active else HUD_LINE
+        (tw, th), _ = cv2.getTextSize(badge, FONT, FONT_SMALL, 1)
+        x -= tw + 12
+        cv2.rectangle(frame, (x - 6, 10), (x + tw + 6, 30), (20, 24, 32), -1)
+        cv2.rectangle(frame, (x - 6, 10), (x + tw + 6, 30), badge_color, 1)
+        cv2.putText(frame, badge, (x, 24),
+                    FONT, FONT_SMALL, badge_color, 1, cv2.LINE_AA)
+        # Canli pulse noktasi
+        if gmc_active:
+            pulse_r = 3 if int(time.time() * 2) % 2 == 0 else 4
+            cv2.circle(frame, (x - 14, 20), pulse_r, HUD_CYBER, -1)
+
+        return frame
+
+    # ------------------------------------------------------------------
+    # HUD — Ekran merkezi nisan (crosshair)
+    # ------------------------------------------------------------------
+    def _draw_crosshair(self, frame: np.ndarray) -> np.ndarray:
+        """Ekran merkezine ince bir + ve aci referansi cizer (HUD hissiyati)."""
+        h, w = frame.shape[:2]
+        cx, cy = w // 2, h // 2
+        gap, length = 8, 14
+
+        # Artı kollar
+        cv2.line(frame, (cx - gap - length, cy), (cx - gap, cy), HUD_NEON, 1, cv2.LINE_AA)
+        cv2.line(frame, (cx + gap, cy), (cx + gap + length, cy), HUD_NEON, 1, cv2.LINE_AA)
+        cv2.line(frame, (cx, cy - gap - length), (cx, cy - gap), HUD_NEON, 1, cv2.LINE_AA)
+        cv2.line(frame, (cx, cy + gap), (cx, cy + gap + length), HUD_NEON, 1, cv2.LINE_AA)
+        # Orta nokta
+        cv2.circle(frame, (cx, cy), 1, HUD_NEON, -1)
+        # Disaridaki koseli kose isaretleri (sinyal kutusu hissi)
+        corner = 22
+        for sx, sy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
+            x0 = cx + sx * corner
+            y0 = cy + sy * corner
+            cv2.line(frame, (x0, y0), (x0 - sx * 6, y0), HUD_LINE, 1, cv2.LINE_AA)
+            cv2.line(frame, (x0, y0), (x0, y0 - sy * 6), HUD_LINE, 1, cv2.LINE_AA)
+        return frame
+
+    # ------------------------------------------------------------------
+    # HUD — Sag alt GMC telemetri kutusu (dx, dy, rot, scale)
+    # ------------------------------------------------------------------
+    def _draw_gmc_hud(self, frame: np.ndarray, extra_info: dict = None) -> np.ndarray:
+        """
+        Sag alt kosede GMC (Global Motion Compensation) telemetri paneli.
+        `extra_info` icinden beklenen anahtarlar (hepsi opsiyonel):
+            - gmc_active: bool
+            - ego_dx, ego_dy: float piksel (anlik)
+            - ego_rot_deg: float derece
+            - ego_scale: float (1.0 = sabit irtifa)
+        """
+        if not extra_info:
+            return frame
+        if not extra_info.get("gmc_active"):
+            return frame
+
+        dx = float(extra_info.get("ego_dx", 0.0))
+        dy = float(extra_info.get("ego_dy", 0.0))
+        rot = float(extra_info.get("ego_rot_deg", 0.0))
+        scl = float(extra_info.get("ego_scale", 1.0))
+
+        h, w = frame.shape[:2]
+        pw, ph = 200, 88
+        x1, y1 = 10, h - ph - 10
+        x2, y2 = x1 + pw, y1 + ph
+
+        # Panel arka plani (neon cerceve + yari saydam)
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), (8, 12, 20), -1)
+        cv2.addWeighted(overlay, 0.78, frame, 0.22, 0, frame)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), HUD_NEON, 1)
+        # Sol dikey vurgu seridi
+        cv2.rectangle(frame, (x1, y1), (x1 + 3, y2), HUD_NEON, -1)
+
+        # Baslik
+        cv2.putText(frame, "EGO-MOTION / GMC", (x1 + 10, y1 + 16),
+                    FONT, 0.42, HUD_NEON, 1, cv2.LINE_AA)
+        cv2.line(frame, (x1 + 10, y1 + 22), (x2 - 10, y1 + 22), HUD_LINE, 1)
+
+        # Veri satirlari (monospace hissi icin sabit genislikli font simulasyonu)
+        row = y1 + 38
+        cv2.putText(frame, f"dx  {dx:+6.2f} px", (x1 + 10, row),
+                    FONT, 0.45, HUD_CYBER, 1, cv2.LINE_AA)
+        cv2.putText(frame, f"dy  {dy:+6.2f} px", (x1 + 10, row + 16),
+                    FONT, 0.45, HUD_CYBER, 1, cv2.LINE_AA)
+        cv2.putText(frame, f"rot {rot:+5.2f} deg", (x1 + 105, row),
+                    FONT, 0.45, HUD_AMBER, 1, cv2.LINE_AA)
+        cv2.putText(frame, f"scl {scl:5.3f}", (x1 + 105, row + 16),
+                    FONT, 0.45, HUD_AMBER, 1, cv2.LINE_AA)
+
+        # Hareket yonu mini okcugu
+        ax, ay = x2 - 22, y2 - 14
+        norm = max(1.0, np.hypot(dx, dy))
+        ux, uy = dx / norm, dy / norm
+        tip = (int(ax + ux * 10), int(ay + uy * 10))
+        cv2.arrowedLine(frame, (ax, ay), tip, HUD_NEON, 1, cv2.LINE_AA, tipLength=0.4)
 
         return frame
 
