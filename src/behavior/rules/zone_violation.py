@@ -1,21 +1,62 @@
+# -*- coding: utf-8 -*-
 """
 Zone Violation — Bölge ihlali tespiti.
 Poligon noktası-içi testi ile nesne pozisyonunu bölgelerle karşılaştırır.
 """
 
 import cv2
-import numpy as np
 import json
 import logging
-from typing import List, Dict, Optional, Tuple
+import math
+from typing import List, Dict, Optional, Tuple, Any
+
+import numpy as np
+
+from src.pil_text import draw_text_bgr
 
 logger = logging.getLogger(__name__)
 
+# Earth radius (m) for local ENU from small lat/lon offsets
+_EARTH_R_M = 6371000.0
+
+
+def _latlon_list_to_ref_pixels(
+    latlon: List[List[float]], georef: Dict[str, Any], ref_w: int, ref_h: int
+) -> np.ndarray:
+    """
+    WGS84 polygon → reference-frame pixels. Flat-Earth; suitable for small sites.
+
+    georef keys: origin_lat, origin_lon, meters_per_pixel, image_anchor [x, y] (ref space).
+    """
+    olat = float(georef["origin_lat"])
+    olon = float(georef["origin_lon"])
+    mpp = float(georef.get("meters_per_pixel", 0.2))
+    ax, ay = georef.get("image_anchor", [ref_w / 2.0, ref_h / 2.0])
+    ax, ay = float(ax), float(ay)
+    out: List[List[float]] = []
+    olat_r = math.radians(olat)
+    for pair in latlon:
+        lat, lon = float(pair[0]), float(pair[1])
+        dlat = math.radians(lat - olat)
+        dlon = math.radians(lon - olon)
+        north = _EARTH_R_M * dlat
+        east = _EARTH_R_M * dlon * math.cos(olat_r)
+        px = ax + east / mpp
+        py = ay - north / mpp
+        out.append([px, py])
+    return np.array(out, dtype=np.float32)
+
 
 class Zone:
-    """Tek bir güvenlik bölgesi."""
+    """Tek bir güvenlik bölgesi (piksel veya WGS84 + georeferans)."""
 
-    def __init__(self, zone_data: dict, frame_w: int = 960, frame_h: int = 540):
+    def __init__(
+        self,
+        zone_data: dict,
+        frame_w: int = 960,
+        frame_h: int = 540,
+        georef: Optional[Dict[str, Any]] = None,
+    ):
         self.id = zone_data["id"]
         self.name = zone_data["name"]
         self.zone_type = zone_data.get("type", "monitor")  # restricted / monitor / safe
@@ -24,10 +65,24 @@ class Zone:
         self.alert_on_entry = zone_data.get("alert_on_entry", False)
         self.description = zone_data.get("description", "")
 
-        # Koordinatları hedef çözünürlüğe ölçekle
         ref_w = zone_data.get("ref_w", 960)
         ref_h = zone_data.get("ref_h", 540)
-        raw_pts = np.array(zone_data["points"], dtype=np.float32)
+        if zone_data.get("points_latlon"):
+            if not georef:
+                raise ValueError(
+                    f"Zone {self.id!r} uses points_latlon but zones.json has no georeference block."
+                )
+            raw_pts = _latlon_list_to_ref_pixels(
+                zone_data["points_latlon"], georef, ref_w, ref_h
+            )
+        elif "points" in zone_data:
+            raw_pts = np.array(zone_data["points"], dtype=np.float32)
+        else:
+            raise ValueError(
+                f"Zone {self.id!r} needs either 'points' (pixel polygon) or 'points_latlon' + georeference."
+            )
+
+        # Koordinatları hedef çözünürlüğe ölçekle
         scale_x = frame_w / ref_w
         scale_y = frame_h / ref_h
         scaled = (raw_pts * [scale_x, scale_y]).astype(np.float32)
@@ -104,11 +159,12 @@ class Zone:
         cv2.line(frame, (cx, cy - 9), (cx, cy - 3), anchor_color, 1, cv2.LINE_AA)
         cv2.line(frame, (cx, cy + 3), (cx, cy + 9), anchor_color, 1, cv2.LINE_AA)
 
-        # Isim (uppercase, teknik)
-        label = f"◈ {self.name.upper()}"
-        cv2.putText(frame, label, (cx + 12, cy + 4),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.42,
-                    (255, 255, 255), 1, cv2.LINE_AA)
+        # İsim (UTF-8 / Türkçe — PIL; OpenCV putText desteklemez)
+        label = f"◈ {self.name}"
+        draw_text_bgr(
+            frame, label, (cx + 12, cy + 4), 13,
+            (255, 255, 255), stroke_width=1, stroke_color=(0, 0, 0),
+        )
         return frame
 
 
@@ -137,10 +193,12 @@ class ZoneViolationDetector:
                 data = json.load(f)
             ref_w = data.get("frame_width", 960)
             ref_h = data.get("frame_height", 540)
+            georef = data.get("georeference")
             for zd in data.get("zones", []):
+                zd = dict(zd)
                 zd["ref_w"] = ref_w
                 zd["ref_h"] = ref_h
-                self.zones.append(Zone(zd, self.frame_w, self.frame_h))
+                self.zones.append(Zone(zd, self.frame_w, self.frame_h, georef=georef))
         except Exception as e:
             logger.error(f"Zone dosyası yüklenemedi: {e}")
 
@@ -189,8 +247,7 @@ class ZoneViolationDetector:
         if zone.zone_type == "restricted" and zone.alert_on_entry:
             result["violation"] = True
             result["alert_msg"] = (
-                f"⚠️ BÖLGE İHLALİ: {class_name} #{track_id} "
-                f"yasak bölgeye girdi [{zone.name}]"
+                f"Zone violation: {class_name} #{track_id} entered {zone.name}"
             )
 
         return result

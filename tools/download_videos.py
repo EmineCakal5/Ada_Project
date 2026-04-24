@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Video indirici — Pexels'ten ucretsiz guvenlik kamerasi videolari indirir.
 Calistir: python tools/download_videos.py

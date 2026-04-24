@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Loitering Detection — Anormal Bekleme Tespiti.
 Bir nesnenin belirli bir süre aynı alanda kalmasını tespit eder.
@@ -103,8 +104,8 @@ class LoiteringDetector:
             if not state["warned"]:
                 state["warned"] = True
                 result["alert_msg"] = (
-                    f"🕐 ANORMAL BEKLEME: {class_name} #{track_id} "
-                    f"{int(stationary_duration)}s boyunca aynı yerde bekliyor"
+                    f"Loitering: {class_name} #{track_id} stationary for "
+                    f"{int(stationary_duration)}s"
                 )
 
         return result

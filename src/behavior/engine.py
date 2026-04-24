@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Behavior Engine — Tüm davranış kurallarını orkestre eden ana motor.
 Zone ihlali + Loitering + Terk edilmiş nesne → Tehdit skoru + MLP sınıflandırma.
@@ -192,6 +193,7 @@ class BehaviorEngine:
                 "loitering":      loiter_result,
                 "abandoned_score": ab_score,
                 "feature_vector": fv.tolist(),
+                "rule_score":     rule_score,
                 "threat_score":   final_score,
                 "threat_level":   final_level,
             }

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 VisDrone2019 -> YOLO Donusturucu
 =================================

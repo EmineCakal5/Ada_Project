@@ -1,10 +1,11 @@
-# Davranissal Guvenlik Analiz Sistemi - Ana Konfigurasyon
-# v2.0 - Sabit Guvenlik Kamerasi Perspektifi
+# İHA / UAV havadan gözlem & davranış analizi — ana yapılandırma (UTF-8)
+# v2.0 — Aerial: bölgeler WGS84 + GMC warp; eğitim verisi (UCF vb.) sabit kamera
+#   olabilir; sunumda: özellik çıkarımı aynı, tehdit kuralları UAV için uyarlanır.
 
 # ─── Detector ─────────────────────────────────────────────
 detector:
   model: "yolov8s.pt"          # yolov8n / yolov8s / yolov8m
-  confidence: 0.4
+  confidence: 0.65
   iou_threshold: 0.45
   device: "cpu"                 # "cpu" veya "cuda"
   classes: [0, 1, 2, 3, 5, 7, 24, 26, 28]  # person, vehicles, backpack, handbag, suitcase
@@ -15,9 +16,10 @@ tracker:
   type: "bytetrack"            # "bytetrack" veya "deepsort"
   bytetrack:
     track_thresh: 0.5
-    track_buffer: 30
+    track_buffer: 20
     match_thresh: 0.8
     frame_rate: 15
+    min_hits: 3                 # En az bu kadar ardışık eşleşme olmadan track gösterilmez
   deepsort:
     max_dist: 0.2
     max_age: 30
@@ -36,14 +38,19 @@ tracker:
 # ─── Davranis Motoru ──────────────────────────────────────
 behavior:
   zones_file: "config/zones.json"
+  # Zone GPS: `zones.json` icinde `georeference` + bolum `points_latlon` (WGS84)
+  # istege bagli. Yoksa sadece `points` (piksel, ref cozunurluk) kullanilir.
 
   loitering:
     threshold_seconds: 60      # Kac saniyeden fazla bekleme anormal
     min_displacement: 50       # Piksel: bu altinda hareket "duruyor" sayilir
 
   abandoned_object:
-    owner_distance: 150        # Piksel: sahibi bu kadar uzaklasirsa nesne "terk edildi"
+    # Kalabalik UAV: 1. en yakin kisi her zaman <200px kaldi; k. en yakin + esik birlikte kullanilir.
+    nearest_person_rank: 8     # k=1: klasik (en yakin); havadan kalabalik sahnede 4-12 deneyin
+    owner_distance: 90         # k. en yakin kisi bu pikselden uzaksa "terk" adayi
     confirm_seconds: 10        # Kac saniye sonra alarm verilir
+    stationary_threshold_px: 28   # Bbox titremesine tolerans (onceki sabit 20px)
 
   threat_scorer:
     weights:
@@ -62,12 +69,14 @@ mlp:
 
 # ─── Dashboard ────────────────────────────────────────────
 dashboard:
-  title: "Davranissal Guvenlik Analiz Sistemi"
+  title: "Aerial Surveillance"
   port: 8501
   frame_width: 960
   frame_height: 540
   max_alerts: 50
   fps_display: true
+  aerial_view: true              # Kuş bakışı: daha ince bbox + AERIAL VIEW etiketi
+  aerial_bbox_scale: 0.7         # Corner bracket ve etiket olcegi (0-1)
   replay_mode: true
   scenarios_dir: "data/scenarios"
 
@@ -80,6 +89,6 @@ video:
 
 # ─── Loglama ──────────────────────────────────────────────
 logging:
-  level: "INFO"                # DEBUG / INFO / WARNING
+  level: "DEBUG"                # DEBUG / INFO / WARNING
   save_alerts: true
   alerts_file: "data/output/alerts.json"

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Threat Scorer — Kural çıktılarından feature vektörü ve birleşik tehlike skoru üretir.
 Implementation Plan v2'deki feature vektör yapısını uygular.

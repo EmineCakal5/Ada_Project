@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 YOLOv8 Drone / IHA Fine-Tuning Scripti
 ======================================

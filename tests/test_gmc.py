@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 GMC (Global Motion Compensation) Smoke Testleri
 ================================================

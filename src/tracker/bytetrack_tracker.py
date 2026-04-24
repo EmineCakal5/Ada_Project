@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 ByteTrack Tracker — Hız öncelikli, sabit kamera için optimize edilmiş tracker.
 ByteTrack algoritması: yüksek confidence + düşük confidence detection'ları birleştirir.
@@ -200,17 +201,20 @@ class ByteTracker:
         self.track_buffer = cfg.get("track_buffer", 30)
         self.match_thresh = cfg.get("match_thresh", 0.8)
         self.frame_rate = cfg.get("frame_rate", 15)
+        self.min_hits = int(cfg.get("min_hits", 3))
 
         self.trackers: List[KalmanBoxTracker] = []
         self.frame_count = 0
         self.max_age = self.track_buffer
-        self.min_hits = 1
         KalmanBoxTracker.count = 0
 
         # Sınıf isimlerini YOLO modelinden alacağız
         self.class_names: dict = {}
 
-        logger.info(f"ByteTracker başlatıldı: thresh={self.track_thresh}, buffer={self.track_buffer}")
+        logger.info(
+            f"ByteTracker başlatıldı: thresh={self.track_thresh}, buffer={self.track_buffer}, "
+            f"min_hits={self.min_hits}"
+        )
 
     def set_class_names(self, names: dict):
         self.class_names = names
@@ -284,8 +288,7 @@ class ByteTracker:
         # Çok uzun süredir güncellenmeyenleri kaldır
         active_tracks = []
         for trk in self.trackers:
-            if trk.time_since_update < self.max_age and \
-               (trk.hits >= self.min_hits or self.frame_count <= self.min_hits):
+            if trk.time_since_update < self.max_age and trk.hits >= self.min_hits:
                 bbox = trk.get_state().tolist()
                 cx = (bbox[0] + bbox[2]) / 2
                 cy = (bbox[1] + bbox[3]) / 2
