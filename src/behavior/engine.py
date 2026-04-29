@@ -12,6 +12,8 @@ from src.tracker.track_history import TrackHistory, TrackInfo
 from src.behavior.rules.zone_violation import ZoneViolationDetector
 from src.behavior.rules.loitering import LoiteringDetector
 from src.behavior.rules.abandoned_object import AbandonedObjectDetector
+from src.behavior.rules.reconnaissance import ReconnaissanceDetector
+from src.behavior.rules.coordinated_movement import CoordinatedMovementDetector
 from src.behavior.threat_scorer import ThreatScorer
 from src.behavior.threat_mlp import ThreatMLPClassifier
 
@@ -66,6 +68,8 @@ class BehaviorEngine:
         self.zone_detector    = None   # Frame boyutu gelince başlatılır
         self.loitering        = LoiteringDetector(config)
         self.abandoned        = AbandonedObjectDetector(config)
+        self.reconnaissance   = ReconnaissanceDetector(config)
+        self.coordinated      = CoordinatedMovementDetector(config)
         self.scorer           = ThreatScorer(config)
         self.mlp              = None   # Lazy load
 
@@ -115,6 +119,8 @@ class BehaviorEngine:
             self.zone_detector.apply_camera_motion(H)
         self.loitering.apply_camera_motion(H)
         self.abandoned.apply_camera_motion(H)
+        self.reconnaissance.apply_camera_motion(H)
+        self.coordinated.apply_camera_motion(H)
 
     def process(self, track_history: TrackHistory,
                 frame_w: int, frame_h: int) -> Tuple[List[Alert], Dict]:
@@ -143,8 +149,16 @@ class BehaviorEngine:
                 score=aa["score"]
             ))
 
-        # Abandoned score map
-        abandoned_scores = {aa["track_id"]: aa["score"] for aa in abandoned_alerts}
+        # Koordineli hareket kontrolü (tüm track'ler gerekli)
+        coord_alerts = self.coordinated.check(active_tracks)
+        for ca in coord_alerts:
+            self._add_alert(new_alerts, Alert(
+                alert_type="coordinated_movement",
+                track_id=ca["track_id"],
+                message=ca["alert_msg"],
+                threat_level="HIGH",
+                score=ca["score"]
+            ))
 
         # Her track için analiz
         for track in active_tracks:
@@ -162,12 +176,22 @@ class BehaviorEngine:
             # 3. Abandoned score for this track
             ab_score = self.abandoned.get_score(tid)
 
-            # 4. Feature vector + rule score
+            # 4. Keşif davranışı
+            recon_result = self.reconnaissance.check(
+                tid, track.trajectory, track.dwell_time, track.class_name
+            )
+            recon_score = recon_result["reconnaissance_score"]
+
+            # 5. Koordineli hareket skoru (bu track için)
+            coord_score = self.coordinated.get_score(tid)
+
+            # 6. Feature vector + rule score
             fv, rule_score, rule_level = self.scorer.compute(
-                track, zone_result, loiter_result, ab_score
+                track, zone_result, loiter_result, ab_score,
+                recon_score, coord_score,
             )
 
-            # 5. MLP sınıflama
+            # 7. MLP sınıflama
             if mlp is not None:
                 try:
                     mlp_level, mlp_probs = mlp.predict(fv)
@@ -188,12 +212,14 @@ class BehaviorEngine:
             track.zone_id = zone_result.get("zone_id")
 
             per_track[tid] = {
-                "zone":           zone_result,
-                "loitering":      loiter_result,
-                "abandoned_score": ab_score,
-                "feature_vector": fv.tolist(),
-                "threat_score":   final_score,
-                "threat_level":   final_level,
+                "zone":                zone_result,
+                "loitering":           loiter_result,
+                "abandoned_score":     ab_score,
+                "reconnaissance":      recon_result,
+                "coordinated_score":   coord_score,
+                "feature_vector":      fv.tolist(),
+                "threat_score":        final_score,
+                "threat_level":        final_level,
             }
 
             # Alarm kontrolleri
@@ -215,9 +241,20 @@ class BehaviorEngine:
                     score=loiter_result.get("loitering_score", 0.5)
                 ))
 
-        # Loitering: aktif olmayan track'leri temizle
+            if recon_result.get("reconnaissance") and recon_result.get("alert_msg"):
+                self._add_alert(new_alerts, Alert(
+                    alert_type="reconnaissance",
+                    track_id=tid,
+                    message=recon_result["alert_msg"],
+                    threat_level="HIGH",
+                    score=recon_score
+                ))
+
+        # Aktif olmayan track'lerin state'ini temizle
         active_ids = [t.track_id for t in active_tracks]
         self.loitering.update_active(active_ids)
+        self.reconnaissance.update_active(active_ids)
+        self.coordinated.update_active(active_ids)
 
         # Alert geçmişine ekle
         self.alert_history.extend(new_alerts)
