@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Ego-Motion Compensator — IHA / Drone Kamerasi icin Global Motion Compensation (GMC)
 ===================================================================================

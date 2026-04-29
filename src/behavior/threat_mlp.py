@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Threat MLP — PyTorch tabanlı tehdit sınıflandırıcı.
 Feature vektörü → LOW / MEDIUM / HIGH / CRITICAL

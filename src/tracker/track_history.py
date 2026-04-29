@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Track History — Takip edilen nesnelerin trajektori ve süre bilgisi.
 Her track_id için pozisyon geçmişi, dwell time ve hız hesaplar.

@@ -42,3 +42,12 @@ data/
 yolov8*\.pt
 *.pt
 models/
+
+# Local debug / extraction logs (keep out of git)
+*.log
+*_debug.txt
+*_extract.txt
+full_train*.txt
+output_log.txt
+robbery_fighting.txt
+burglary_reextract.txt

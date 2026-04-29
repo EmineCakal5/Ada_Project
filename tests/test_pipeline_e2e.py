@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Pipeline End-to-End Smoke Test (GMC acik)
 ==========================================

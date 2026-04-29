@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Pipeline — Uçtan uca video → tespit → takip → davranış → görselleştirme.
 Sprint 1 sonunda çalışan demo.  Sprint 2 sonunda davranış analizi eklenir.
@@ -243,6 +244,18 @@ def main():
     args = parser.parse_args()
 
     config = load_config(args.config)
+    _log_cfg = config.get("logging", {}) or {}
+    _lvl = getattr(
+        logging,
+        str(_log_cfg.get("level", "INFO")).upper(),
+        logging.INFO,
+    )
+    logging.basicConfig(
+        level=_lvl,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        force=True,
+    )
+
     pipeline = Pipeline(config)
 
     source = args.source

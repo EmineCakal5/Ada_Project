@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Replay Mode — Önceden kaydedilmiş senaryoları dashboard'da oynatır.
 Sunumda 'bir şey olmama' riskini ortadan kaldırır.
@@ -55,21 +56,21 @@ class ReplayManager:
     # Gömülü varsayılan senaryolar (video yoksa bilgi ver)
     DEFAULT_SCENARIOS = [
         {
-            "name": "Senaryo 1 — Bölge İhlali",
+            "name": "Scenario 1 — Zone violation",
             "video_path": "data/scenarios/scenario_zone_violation.mp4",
-            "description": "Bir kişi yasak bölgeye girer, sistem uyarı verir.",
+            "description": "A person enters a restricted zone; the system raises an alert.",
             "tags": ["zone_violation", "person"]
         },
         {
-            "name": "Senaryo 2 — Terk Edilmiş Nesne",
+            "name": "Scenario 2 — Abandoned object",
             "video_path": "data/scenarios/scenario_abandoned.mp4",
-            "description": "Biri çanta bırakıp uzaklaşır, sistem tespit eder.",
+            "description": "Someone leaves a bag and walks away; the system flags abandonment.",
             "tags": ["abandoned_object", "backpack"]
         },
         {
-            "name": "Senaryo 3 — Anormal Bekleme",
+            "name": "Scenario 3 — Loitering",
             "video_path": "data/scenarios/scenario_loitering.mp4",
-            "description": "Bir kişi 60+ saniye aynı noktada durur, sistem alarm verir.",
+            "description": "A person remains stationary 60+ seconds; the system triggers loitering logic.",
             "tags": ["loitering", "person"]
         },
     ]
@@ -160,27 +161,24 @@ class ReplayManager:
 
     @staticmethod
     def get_download_instructions() -> str:
-        """Video indir/ekle talimatları."""
+        """How to add scenario videos."""
         return """
-## 📥 Test Videosu Ekleme
+## Add test videos
 
-Senaryolar için gerçek güvenlik kamerası videoları gerekli.
+Replay scenarios need real surveillance-style footage.
 
-### Seçenek 1 — YouTube İndir
+### Option A — Download with yt-dlp
 ```bash
 pip install yt-dlp
 yt-dlp "https://youtube.com/..." -o "data/scenarios/scenario_zone_violation.mp4"
 ```
 
-### Seçenek 2 — Hazır Güvenlik Kamerası Videoları
-- [Pexels - Surveillance](https://www.pexels.com/search/videos/security%20camera/)
-- [Pixabay - CCTV](https://pixabay.com/videos/search/security%20camera/)
+### Option B — Stock footage
+- [Pexels — surveillance](https://www.pexels.com/search/videos/security%20camera/)
+- [Pixabay — CCTV](https://pixabay.com/videos/search/security%20camera/)
 
-### Seçenek 3 — Webcam ile Kayıt
-Pipeline. py çalışırken 'r' tuşuna basın.
-
-Videolar şuraya konulmalı:
-- data/scenarios/scenario_zone_violation.mp4
-- data/scenarios/scenario_abandoned.mp4
-- data/scenarios/scenario_loitering.mp4
+Place files as:
+- `data/scenarios/scenario_zone_violation.mp4`
+- `data/scenarios/scenario_abandoned.mp4`
+- `data/scenarios/scenario_loitering.mp4`
 """

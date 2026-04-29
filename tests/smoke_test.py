@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Smoke Test -- Tum modullerin import ve temel fonksiyonlarini test eder.
 Calistir: python tests/smoke_test.py

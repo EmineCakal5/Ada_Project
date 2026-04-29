@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 YOLOv8 Detector — Sabit Güvenlik Kamerası için Nesne Tespiti
 COCO pretrained model ile frame → bbox listesi üretir.

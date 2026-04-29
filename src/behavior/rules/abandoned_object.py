@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Abandoned Object Detection — Terk Edilmiş Nesne Tespiti.
 Bir nesnenin (çanta, kutu vb.) sahibinden ayrılarak hareketsiz kalmasını tespit eder.
@@ -6,7 +7,7 @@ Bir nesnenin (çanta, kutu vb.) sahibinden ayrılarak hareketsiz kalmasını tes
 import time
 import numpy as np
 import logging
-from typing import Dict, List, Tuple, Optional, Set
+from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,8 @@ class AbandonedObjectDetector:
 
     Algoritma:
     1. Hareketsiz nesneleri takip et (küçük displacement).
-    2. En yakın kişi owner_distance'tan uzaklaşırsa → "terk edilmiş aday".
+    2. k. en yakın kişi (nearest_person_rank) owner_distance'tan uzaksa → "terk edilmiş aday"
+       — kalabalıkta 1. en yakın her zaman çanta yanında kalabilir; k>1 ile ayarlanır.
     3. confirm_seconds kadar bu durum devam ederse → alarm ver.
 
     Kullanım:
@@ -36,18 +38,21 @@ class AbandonedObjectDetector:
 
     def __init__(self, config: dict):
         cfg = config["behavior"]["abandoned_object"]
-        self.owner_distance = cfg.get("owner_distance", 150)    # piksel
+        self.owner_distance = cfg.get("owner_distance", 200)    # piksel
         self.confirm_seconds = cfg.get("confirm_seconds", 10)   # saniye
+        self.nearest_person_rank = max(1, int(cfg.get("nearest_person_rank", 1)))
 
         # Hareketsiz nesne state'i: track_id → {center, last_move, candidate_since, warned}
         self._object_states: Dict[int, dict] = {}
 
-        # Hareketsizlik eşiği (piksel/frame)
-        self.stationary_threshold = 20
+        # Piksel: merkez kayması bu değerin altındaysa "sabit" say (bbox/GMC jitter)
+        self.stationary_threshold = float(cfg.get("stationary_threshold_px", 28))
 
         logger.info(
             f"AbandonedObjectDetector: owner_dist={self.owner_distance}px, "
-            f"confirm={self.confirm_seconds}s"
+            f"confirm={self.confirm_seconds}s, "
+            f"stationary_px={self.stationary_threshold}, "
+            f"person_rank_k={self.nearest_person_rank}"
         )
 
     def check(self, tracks: List) -> List[Dict]:
@@ -66,6 +71,16 @@ class AbandonedObjectDetector:
         # Nesneleri ve sahip adaylarını ayır (kişi + araç)
         objects = [t for t in tracks if t.class_name in OBJECT_CLASS_NAMES]
         persons = [t for t in tracks if t.class_name in OWNER_CLASS_NAMES]
+
+        if logger.isEnabledFor(logging.DEBUG):
+            for t in tracks:
+                logger.debug(
+                    "Nesne sinifi: %s, ID: %s (cls_id=%s, vel=%.3f)",
+                    t.class_name,
+                    t.track_id,
+                    getattr(t, "class_id", -1),
+                    float(t.velocity),
+                )
 
         active_object_ids = {t.track_id for t in objects}
 
@@ -100,8 +115,10 @@ class AbandonedObjectDetector:
                 state["warned"] = False
                 continue
 
-            # Nesne sabit — en yakın kişiyi bul
-            min_dist = self._nearest_person_distance(center, persons)
+            # Nesne sabit — k. en yakın kişi (kalabalık UAV görüntüsü için)
+            min_dist = self._k_nearest_person_distance(
+                center, persons, self.nearest_person_rank
+            )
 
             if min_dist > self.owner_distance:
                 # Sahibi uzaklaştı — aday başlat
@@ -129,6 +146,36 @@ class AbandonedObjectDetector:
                 # Sahibi geri döndü
                 state["candidate_since"] = None
                 state["warned"] = False
+
+        if logger.isEnabledFor(logging.DEBUG):
+            parts: List[str] = []
+            for obj in objects:
+                tid = obj.track_id
+                st = self._object_states.get(tid)
+                md = self._k_nearest_person_distance(
+                    obj.center, persons, self.nearest_person_rank
+                )
+                if st is None:
+                    parts.append(
+                        f"id={tid} cls={obj.class_name} state=new "
+                        f"near_person={md:.0f}px/{self.owner_distance}px"
+                    )
+                    continue
+                cand = st.get("candidate_since")
+                cand_sec = (time.time() - cand) if cand is not None else 0.0
+                disp = float(
+                    np.linalg.norm(np.array(obj.center) - np.array(st["center"]))
+                )
+                parts.append(
+                    f"id={tid} cls={obj.class_name} near_person={md:.0f}px "
+                    f"cand={cand_sec:.1f}s/{self.confirm_seconds}s "
+                    f"disp={disp:.1f}px(stationary<={self.stationary_threshold}) "
+                    f"vel={float(obj.velocity):.3f} warned={st.get('warned')}"
+                )
+            logger.debug(
+                "abandoned_monitored: %s",
+                " | ".join(parts) if parts else "(nesne yok - OBJECT_CLASS_NAMES disi veya tespit yok)",
+            )
 
         return alerts
 
@@ -163,12 +210,15 @@ class AbandonedObjectDetector:
             state["center"] = (float(nx), float(ny))
 
     @staticmethod
-    def _nearest_person_distance(center: Tuple, persons: List) -> float:
-        """En yakın kişiye olan mesafeyi döner."""
+    def _k_nearest_person_distance(
+        center: Tuple, persons: List, k: int
+    ) -> float:
+        """Merkeze göre k. en yakın kişinin mesafesi (k=1: en yakın)."""
         if not persons:
             return float("inf")
-        dists = [
-            np.linalg.norm(np.array(center) - np.array(p.center))
+        dists = sorted(
+            float(np.linalg.norm(np.array(center) - np.array(p.center)))
             for p in persons
-        ]
-        return float(min(dists))
+        )
+        rank = min(max(1, k), len(dists))
+        return dists[rank - 1]

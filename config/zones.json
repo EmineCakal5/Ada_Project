@@ -1,37 +1,43 @@
 {
+  "georeference": {
+    "origin_lat": 41.0082,
+    "origin_lon": 28.9784,
+    "meters_per_pixel": 0.25,
+    "image_anchor": [480, 270]
+  },
   "zones": [
     {
       "id": "zone_1",
-      "name": "Yasak Bolge - Giris",
+      "name": "RESTRICTED ZONE A",
       "type": "restricted",
       "color": [255, 0, 0],
       "alpha": 0.3,
       "points": [[50, 50], [300, 50], [300, 250], [50, 250]],
       "alert_on_entry": true,
-      "description": "Yetkisiz giris yasak"
+      "description": "Unauthorized entry prohibited"
     },
     {
       "id": "zone_2",
-      "name": "Izleme Bolge - Merkez",
+      "name": "MONITORING ZONE",
       "type": "monitor",
       "color": [255, 165, 0],
       "alpha": 0.2,
       "points": [[320, 150], [640, 150], [640, 400], [320, 400]],
       "alert_on_entry": false,
-      "description": "Yuksek trafik bolge - bekleme izle"
+      "description": "High-traffic area — monitor dwell behavior"
     },
     {
       "id": "zone_3",
-      "name": "Guvenli Bolge",
+      "name": "SAFE ZONE",
       "type": "safe",
       "color": [0, 255, 0],
       "alpha": 0.15,
       "points": [[650, 300], [900, 300], [900, 530], [650, 530]],
       "alert_on_entry": false,
-      "description": "Normal gecis bolge"
+      "description": "Normal transit corridor"
     }
   ],
   "frame_width": 960,
   "frame_height": 540,
-  "notes": "Koordinatlar referans cozunurluk icin (960x540). Otomatik olarak olceklenir."
+  "notes": "points: piksel poligon, ref cozunurluk=frame_width/height, GMC ile warp. Opsiyonel: bolume points_latlon [[lat,lon],...] + kok georeference (WGS84, kucuk alan, duz-dunya); izdusum piksele, sonra ayni GMC zinciri. meters_per_pixel / image_anchor gorus alaniniza gore kalibre edin."
 }

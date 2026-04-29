@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Alert System — Alert geçmişi yönetimi, loglama ve JSON kaydetme.
 """

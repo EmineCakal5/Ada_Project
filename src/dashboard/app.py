@@ -1,206 +1,226 @@
+# -*- coding: utf-8 -*-
 """
-Streamlit Dashboard — Davranışsal Güvenlik Analiz Sistemi
-Canlı video + Alert Paneli + Replay Mode + Metrikler
+Streamlit dashboard — live video, alert panel, replay, metrics.
 
-Çalıştırmak için:
+Run:
     streamlit run src/dashboard/app.py
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import cv2
 import numpy as np
 import yaml
 import sys
 import os
 import time
-import json
-import threading
+import logging
+from html import escape as html_escape
+from typing import List
 import plotly.graph_objects as go
-import plotly.express as px
 import pandas as pd
-from PIL import Image
 
-# Path ayarla
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DASHBOARD_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.normpath(os.path.join(DASHBOARD_DIR, "..", ".."))
 sys.path.insert(0, ROOT)
+
+
+def resolve_user_video_path(user_input: str) -> str:
+    """Map manual input to a filesystem path: absolute as-is, else relative to project root."""
+    s = (user_input or "").strip()
+    if not s:
+        return s
+    s = os.path.expanduser(s)
+    norm = os.path.normpath(s)
+    if os.path.isabs(norm):
+        return os.path.normpath(os.path.abspath(norm))
+    return os.path.normpath(os.path.join(DASHBOARD_DIR, "..", "..", norm))
 
 from src.detector.yolo_detector import YOLODetector
 from src.tracker.bytetrack_tracker import ByteTracker
 from src.tracker.track_history import TrackHistory
 from src.tracker.ego_motion import EgoMotionCompensator, decompose_affine
 from src.behavior.engine import BehaviorEngine
-from src.dashboard.visualizer import Visualizer
+from src.dashboard.visualizer import Visualizer, draw_text_bgr
 from src.dashboard.alert_system import AlertSystem
 from src.dashboard.replay_mode import ReplayManager
 
-# ─── Sayfa Yapılandırması ──────────────────────────────────────
+# ─── Theme constants ───────────────────────────────────────────
+
+BG = "#0A0E1A"
+ACCENT = "#00D4FF"
+CRIT = "#FF4444"
+HIGH_C = "#FF8C00"
+MED_C = "#FFD700"
+NORM_C = "#00FF88"
 
 st.set_page_config(
-    page_title="Davranışsal Güvenlik Analiz Sistemi",
-    page_icon="🔒",
+    page_title="SENTINEL UAV — Aerial Surveillance",
+    page_icon="◆",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# ─── CSS ──────────────────────────────────────────────────────
-
-st.markdown("""
+st.markdown(f"""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
-    @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
 
-    * { font-family: 'Inter', sans-serif; }
-    h1, h2, h3, h4, h5, .font-space { font-family: 'Space Grotesk', sans-serif !important; }
+    html, body, [class*="css"] {{
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }}
+    h1, h2, h3, h4, h5, .font-mono-head {{
+        font-family: 'JetBrains Mono', 'Consolas', monospace !important;
+    }}
 
-    /* SENTINEL Color Palette & Base */
-    .stApp {
-        background-color: #111318;
-        color: #e2e2e9;
-    }
-    
-    header[data-testid="stHeader"] { display: none; }
-    .block-container { padding-top: 2rem; max-width: 1400px; }
-    [data-testid="stSidebar"] {
-        background-color: #111318 !important;
-        border-right: 1px solid rgba(59, 73, 77, 0.2);
-    }
-    [data-testid="stSidebar"] p, [data-testid="stSidebar"] span, [data-testid="stSidebar"] label {
-        color: #bac9ce !important;
-    }
+    .stApp {{
+        background-color: {BG};
+        color: #e8eaef;
+    }}
 
-    /* Header */
-    .sentinel-topbar {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 1.2rem 2rem;
-        background: rgba(17, 19, 24, 0.8);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border: 1px solid rgba(59, 73, 77, 0.2);
-        border-radius: 8px;
-        margin-bottom: 1.5rem;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-    }
-    .sentinel-title {
-        color: #00dcff;
-        font-family: 'Space Grotesk', sans-serif !important;
-        font-weight: 700;
-        font-size: 1.4rem;
-        letter-spacing: -0.5px;
-        margin: 0;
-    }
-    .sentinel-subtitle {
-        color: #bac9ce;
-        font-size: 0.65rem;
-        letter-spacing: 0.2em;
-        text-transform: uppercase;
-        margin-top: 4px;
-    }
+    header[data-testid="stHeader"] {{ display: none; }}
+    .block-container {{
+        padding-top: 1.25rem;
+        padding-bottom: 2rem;
+        max-width: 1600px;
+    }}
+    [data-testid="stSidebar"] {{
+        background-color: #070b14 !important;
+        border-right: 1px solid rgba(0, 212, 255, 0.12);
+    }}
+    [data-testid="stSidebar"] p, [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] label, [data-testid="stSidebar"] .stMarkdown {{
+        color: #b8c0d4 !important;
+    }}
 
-    /* Alerts */
-    .alert-container {
-        background: #1a1b21;
-        border-radius: 8px;
-        padding: 1rem;
-        border: 1px solid rgba(59, 73, 77, 0.2);
-        max-height: 600px;
-        overflow-y: auto;
-    }
-    .alert-card {
-        background: #282a2f;
-        padding: 0.8rem 1rem;
-        margin-bottom: 0.8rem;
-        border-radius: 4px;
-        position: relative;
-        overflow: hidden;
-        border-left: 3px solid transparent;
-        transition: background 0.2s;
-    }
-    .alert-card:hover { background: #33353a; }
-    
-    .critical-bg { border-left-color: #aa0a1b !important; }
-    .high-bg { border-left-color: #ffb7b1 !important; }
-    .medium-bg { border-left-color: #00a2e6 !important; }
-    .low-bg { border-left-color: #859397 !important; }
+    /* Sidebar selectboxes (e.g. Test videos): native arrow, no BaseWeb/text cursor */
+    [data-testid="stSidebar"] [data-testid="stSelectbox"] *,
+    [data-testid="stSidebar"] [data-testid="stSelectbox"] *::before,
+    [data-testid="stSidebar"] [data-testid="stSelectbox"] *::after {{
+        cursor: default !important;
+    }}
 
-    .alert-header { display: flex; justify-content: space-between; margin-bottom: 0.4rem; }
-    .alert-level {
-        font-size: 0.65rem;
-        font-weight: 700;
-        text-transform: uppercase;
-        font-family: 'Space Grotesk', sans-serif !important;
-    }
-    .critical-text { color: #aa0a1b; }
-    .high-text { color: #ffb7b1; }
-    .medium-text { color: #00a2e6; }
-    .low-text { color: #859397; }
-
-    .alert-time { font-size: 0.65rem; font-family: monospace; color: #bac9ce; }
-    .alert-title { font-size: 0.85rem; font-weight: 700; color: #e2e2e9; margin: 0 0 0.2rem 0; line-height: 1.2; }
-    .alert-desc { font-size: 0.75rem; color: #bac9ce; margin: 0; line-height: 1.4; }
-
-    /* Buttons */
-    .stButton > button {
-        background-color: transparent !important;
-        border: 1px solid rgba(59, 73, 77, 0.5) !important;
-        color: #00dcff !important;
-        font-family: 'Space Grotesk', sans-serif !important;
+    div[data-testid="stVerticalBlock"] > div:has(> label) label {{
+        font-family: 'JetBrains Mono', monospace !important;
         font-size: 0.8rem !important;
-        letter-spacing: 1px;
-        text-transform: uppercase;
-        transition: all 0.2s ease-in-out;
-    }
-    .stButton > button:hover {
-        background-color: rgba(0, 220, 255, 0.1) !important;
-        border-color: #00dcff !important;
-        box-shadow: 0 0 10px rgba(0,220,255,0.2) !important;
-    }
+        letter-spacing: 0.04em;
+    }}
 
-    /* Video & Chart Overlays */
-    .stImage > img { padding: 4px; background: #1a1b21; border-radius: 8px; border: 1px solid rgba(59,73,77,0.3); }
-    
-    /* Metrics panel */
-    .metrics-footer {
-        background: #1a1b21;
-        border: 1px solid rgba(59,73,77,0.2);
-        padding: 1.2rem;
+    .stButton > button {{
+        background: linear-gradient(180deg, rgba(0,212,255,0.12) 0%, rgba(0,212,255,0.04) 100%) !important;
+        border: 1px solid rgba(0, 212, 255, 0.45) !important;
+        color: {ACCENT} !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 0.78rem !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.12em !important;
+        text-transform: uppercase;
+        border-radius: 6px !important;
+        padding: 0.65rem 1rem !important;
+        transition: all 0.18s ease;
+    }}
+    .stButton > button:hover {{
+        border-color: {ACCENT} !important;
+        box-shadow: 0 0 20px rgba(0, 212, 255, 0.25);
+        background: rgba(0, 212, 255, 0.18) !important;
+    }}
+
+    .stImage > img {{
+        padding: 6px;
+        background: #070b14;
+        border-radius: 10px;
+        border: 1px solid rgba(0, 212, 255, 0.15);
+    }}
+
+    .metrics-footer {{
+        background: linear-gradient(180deg, #0d1222 0%, #080c18 100%);
+        border: 1px solid rgba(0, 212, 255, 0.12);
+        padding: 1rem 0.5rem;
         display: flex;
         justify-content: space-around;
-        border-radius: 8px;
-        margin-top: 1rem;
-    }
-    .metric-box { display: flex; flex-direction: column; text-align: center; }
-    .metric-box label {
-        font-size: 0.65rem;
-        font-family: 'Space Grotesk', sans-serif !important;
-        font-weight: 700;
-        color: #bac9ce;
+        align-items: flex-end;
+        border-radius: 10px;
+        margin-top: 0.75rem;
+    }}
+    .metric-box {{
+        display: flex;
+        flex-direction: column;
+        text-align: center;
+        min-width: 0;
+    }}
+    .metric-box label {{
+        font-size: 0.62rem;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-weight: 600;
+        color: #7d8aa3;
         text-transform: uppercase;
-        letter-spacing: 0.1em;
-    }
-    .metric-box .metric-val {
-        font-size: 1.8rem;
-        font-family: 'Space Grotesk', sans-serif !important;
-        font-weight: 900;
-        color: #00dcff;
-        line-height: 1.2;
-        margin-top: 0.2rem;
-    }
+        letter-spacing: 0.14em;
+    }}
+    .metric-box .metric-val {{
+        font-size: 1.65rem;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-weight: 700;
+        color: {ACCENT};
+        line-height: 1.15;
+        margin-top: 0.15rem;
+    }}
 
-    @keyframes pulse-dot {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.5; }
-    }
-    .live-dot {
-        height: 6px; width: 6px; background-color: #ffb4ab; border-radius: 50%;
-        display: inline-block; margin-right: 6px; animation: pulse-dot 1.5s infinite;
-    }
+    .metrics-uav-hero {{
+        display: flex;
+        gap: 1rem;
+        margin-top: 0.75rem;
+        margin-bottom: 0.35rem;
+    }}
+    .uav-hero-box {{
+        flex: 1;
+        min-width: 0;
+        background: linear-gradient(180deg, #0f1528 0%, #0a0e1a 100%);
+        border: 1px solid rgba(0, 212, 255, 0.28);
+        border-radius: 10px;
+        padding: 0.75rem 1rem 0.65rem;
+        text-align: center;
+    }}
+    .uav-hero-box label {{
+        font-size: 0.68rem;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-weight: 700;
+        color: #9aa8c4;
+        text-transform: uppercase;
+        letter-spacing: 0.2em;
+        display: block;
+        margin-bottom: 0.25rem;
+    }}
+    .uav-hero-gmc .metric-hero-val {{
+        font-size: 2.35rem;
+        line-height: 1.1;
+    }}
+    .uav-hero-drift .metric-hero-val {{
+        font-size: 2rem;
+        line-height: 1.1;
+    }}
+    .metric-hero-val {{
+        font-family: 'JetBrains Mono', monospace !important;
+        font-weight: 700;
+    }}
+    .uav-hero-drift .drift-dxdy {{
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.7rem;
+        color: #6b7a94;
+        letter-spacing: 0.04em;
+        margin-top: 0.2rem;
+    }}
+
+    .section-label {{
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 0.72rem !important;
+        letter-spacing: 0.2em;
+        color: #7d8aa3 !important;
+        text-transform: uppercase;
+        margin-bottom: 0.35rem !important;
+    }}
+
 </style>
 """, unsafe_allow_html=True)
 
-
-# ─── Config Yükleme ───────────────────────────────────────────
 
 @st.cache_resource
 def load_config():
@@ -211,18 +231,16 @@ def load_config():
 
 @st.cache_resource
 def init_components(_config):
-    """Pipeline bileşenlerini bir kez başlat."""
-    detector  = YOLODetector(_config)
-    tracker   = ByteTracker(_config)
-    if hasattr(detector, 'model') and hasattr(detector.model, 'names'):
+    detector = YOLODetector(_config)
+    tracker = ByteTracker(_config)
+    if hasattr(detector, "model") and hasattr(detector.model, "names"):
         tracker.set_class_names(detector.model.names)
-    history   = TrackHistory()
-    engine    = BehaviorEngine(_config)
+    history = TrackHistory()
+    engine = BehaviorEngine(_config)
     visualizer = Visualizer(_config)
-    alert_sys  = AlertSystem(_config)
-    replay    = ReplayManager(_config)
+    alert_sys = AlertSystem(_config)
+    replay = ReplayManager(_config)
 
-    # Ego-Motion (GMC) — drone/IHA modu icin; sabit kamera modunda None kalir
     ego_cfg = (_config.get("tracker", {}) or {}).get("ego_motion", {}) or {}
     if ego_cfg.get("enabled", False):
         ego = EgoMotionCompensator(
@@ -236,282 +254,407 @@ def init_components(_config):
     return detector, tracker, history, engine, visualizer, alert_sys, replay, ego
 
 
-# ─── Session State ────────────────────────────────────────────
-
 def init_state():
     defaults = {
-        "running":         False,
-        "replay_mode":     False,
+        "running": False,
+        "replay_mode": False,
         "current_scenario": None,
-        "alerts":          [],
-        "frame_count":     0,
-        "fps":             0.0,
-        "track_count":     0,
-        "threat_history":  [],   # [(time, score)]
+        "alerts": [],
+        "frame_count": 0,
+        "fps": 0.0,
+        "track_count": 0,
+        "threat_history": [],
+        "pipeline_frame_count": 0,
+        "video_frame_pos": 0,
+        "last_cap_source": None,
+        "threat_plot_ema": 0.0,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
 
-# ─── Header ───────────────────────────────────────────────────
-
 def render_header():
-    st.markdown("""
-    <div class="sentinel-topbar">
-        <div>
-            <h1 class="sentinel-title">SENTINEL COMMAND</h1>
-            <div class="sentinel-subtitle">Behavioral Security Analysis v2.0.4</div>
-        </div>
-        <div style="display: flex; gap: 1rem; align-items: center;">
-            <span class="live-dot"></span>
-            <span style="font-family: 'Space Grotesk'; font-weight: 700; color: #ffb4ab; font-size: 0.75rem; letter-spacing: 1px;">SYSTEM LIVE</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    html_doc = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"/>
+<style>
+  html,body{{margin:0;background:transparent;color:#e8eaef;
+    font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased;}}
+  .bar{{
+    display:flex;justify-content:space-between;align-items:center;
+    padding:14px 22px;background:rgba(10,14,26,0.96);
+    border:1px solid rgba(0,212,255,0.22);border-radius:10px;
+    box-shadow:0 8px 32px rgba(0,0,0,0.45);
+  }}
+  h1{{margin:0;font-family:'JetBrains Mono','Consolas',monospace;font-size:1.45rem;
+    font-weight:700;color:{ACCENT};letter-spacing:0.03em;}}
+  .sub{{font-size:0.62rem;color:#7d8aa3;text-transform:uppercase;
+    letter-spacing:0.22em;margin-top:6px;}}
+  .right{{text-align:right;}}
+  #clock{{font-family:'JetBrains Mono',monospace;font-size:0.95rem;color:#e8eaef;}}
+  .live-row{{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:6px;}}
+  .pulse{{
+    width:8px;height:8px;background:{NORM_C};border-radius:50%;
+    animation:pulse 1.15s ease-in-out infinite;
+    box-shadow:0 0 10px rgba(0,255,136,0.55);
+  }}
+  @keyframes pulse{{0%,100%{{opacity:1;transform:scale(1);}}50%{{opacity:0.45;transform:scale(0.88);}}}}
+  .live-txt{{
+    font-family:'JetBrains Mono',monospace;font-size:0.68rem;font-weight:700;
+    letter-spacing:0.18em;color:{NORM_C};
+  }}
+</style></head><body>
+<div class="bar">
+  <div>
+    <h1>SENTINEL UAV COMMAND</h1>
+    <div class="sub">Aerial Surveillance System · Behavioral Analysis v2.0.4</div>
+  </div>
+  <div class="right">
+    <div id="clock">--:--:--</div>
+    <div class="live-row"><span class="pulse"></span><span class="live-txt">UAV LINK LIVE</span></div>
+  </div>
+</div>
+<script>
+function tick(){{
+  const el=document.getElementById('clock');
+  const d=new Date();
+  const t=d.toLocaleTimeString('en-GB',{{hour12:false}});
+  const dt=d.toLocaleDateString('en-GB',{{day:'2-digit',month:'short',year:'numeric'}});
+  el.textContent=t+' · '+dt;
+}}
+tick(); setInterval(tick,1000);
+</script>
+</body></html>"""
+    components.html(html_doc, height=104)
 
 
-# ─── Metrik Kartlar ───────────────────────────────────────────
-
-def render_metrics(alert_sys: AlertSystem, fps: float, track_count: int,
-                   extra_info: dict = None):
-    """Alt metrik seridi. GMC / Drone modunda kamera sapmasi ve GMC
-    durumunu da canli olarak gosterir."""
+def render_metrics(alert_sys: AlertSystem, fps: float, track_count: int, extra_info: dict = None):
     stats = alert_sys.get_stats()
-
     info = extra_info or {}
     gmc_active = bool(info.get("gmc_active"))
     dx = float(info.get("ego_dx", 0.0))
     dy = float(info.get("ego_dy", 0.0))
     drift_mag = (dx * dx + dy * dy) ** 0.5
 
-    # GMC status gorsel durumu
     if gmc_active:
-        gmc_label = "ACTIVE"
-        gmc_color = "#00ffa5"  # siber yesil
-        gmc_dot   = "● "
+        gmc_label = "ON"
+        gmc_color = NORM_C
+        gmc_dot = "● "
     else:
-        gmc_label = "OFFLINE"
-        gmc_color = "#859397"
-        gmc_dot   = "○ "
+        gmc_label = "OFF"
+        gmc_color = "#5c6578"
+        gmc_dot = "○ "
 
-    # Ciddi sapma rengi (> ~3 px/frame dikkatli)
-    drift_color = "#00dcff" if drift_mag < 3.0 else "#ffaa00"
+    drift_color = ACCENT if drift_mag < 3.0 else HIGH_C
 
     st.markdown(f"""
+    <div class="metrics-uav-hero">
+        <div class="uav-hero-box uav-hero-gmc">
+            <label>GMC status</label>
+            <span class="metric-hero-val" style="color:{gmc_color};">{gmc_dot}{gmc_label}</span>
+        </div>
+        <div class="uav-hero-box uav-hero-drift">
+            <label>Camera drift (px)</label>
+            <span class="metric-hero-val" style="color:{drift_color};">{drift_mag:.2f}</span>
+            <div class="drift-dxdy">frame Δ &nbsp; dx {dx:+.2f} · dy {dy:+.2f}</div>
+        </div>
+    </div>
     <div class="metrics-footer">
         <div class="metric-box">
-            <label>Active Trackers</label>
-            <span class="metric-val" style="color: #00dcff;">{track_count}</span>
+            <label>Active tracks</label>
+            <span class="metric-val" style="color:{ACCENT};">{track_count}</span>
         </div>
         <div class="metric-box">
-            <label>FPS Rate</label>
-            <span class="metric-val" style="color: #e2e2e9;">{fps:.1f}</span>
+            <label>Stream FPS</label>
+            <span class="metric-val" style="color:#e8eaef;">{fps:.1f}</span>
         </div>
         <div class="metric-box">
-            <label>Camera Drift (px)</label>
-            <span class="metric-val" style="color: {drift_color};">{drift_mag:.2f}</span>
-            <span style="font-family:'Space Grotesk';font-size:0.6rem;color:#bac9ce;letter-spacing:0.1em;">
-                dx {dx:+.2f} &nbsp; dy {dy:+.2f}
-            </span>
+            <label>Critical</label>
+            <span class="metric-val" style="color:{CRIT};">{stats['critical']}</span>
         </div>
         <div class="metric-box">
-            <label>GMC Status</label>
-            <span class="metric-val" style="color: {gmc_color};font-size:1.3rem;">{gmc_dot}{gmc_label}</span>
-        </div>
-        <div class="metric-box">
-            <label>Critical Alerts</label>
-            <span class="metric-val" style="color: #aa0a1b;">{stats['critical']}</span>
-        </div>
-        <div class="metric-box">
-            <label>Total Events</label>
-            <span class="metric-val" style="color: #e2e2e9;">{stats['total']}</span>
+            <label>Total alerts</label>
+            <span class="metric-val" style="color:#e8eaef;">{stats['total']}</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
 
-# ─── Alert Paneli ────────────────────────────────────────────
-
 def render_alerts(alert_sys: AlertSystem):
-    recent = alert_sys.get_recent(n=15)
-    
-    html = '<div class="alert-container">'
-    html += '''
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; border-bottom: 1px solid rgba(59,73,77,0.2); padding-bottom: 0.5rem;">
-            <h2 style="font-size: 0.85rem; font-family: 'Space Grotesk'; font-weight: 700; margin: 0; color: #e2e2e9; text-transform: uppercase; letter-spacing: 1px;">Active Security Events</h2>
-            <span style="background: #93000a; color: #ffdad6; font-size: 0.6rem; padding: 2px 6px; border-radius: 4px; font-weight: bold; animation: pulse-dot 2s infinite;">LIVE</span>
-        </div>
-    '''
+    """Newest-first alert cards; scroll after ~8 cards."""
+    recent = alert_sys.get_recent(n=80)
+    recent = list(reversed(recent))
+    cards_html: List[str] = []
 
-    if not recent:
-        html += '<p style="color: #bac9ce; font-size: 0.8rem;">No anomalous events detected.</p></div>'
-        st.markdown(html, unsafe_allow_html=True)
-        return
-
-    for a in reversed(recent):
+    for a in recent[:80]:
         level_str = str(a.get("threat_level", "LOW")).upper()
-        
-        bg_class = "low-bg"
-        text_class = "low-text"
+        card_mod = "low"
         if level_str == "CRITICAL":
-            bg_class = "critical-bg"
-            text_class = "critical-text"
+            card_mod = "critical"
         elif level_str == "HIGH":
-            bg_class = "high-bg"
-            text_class = "high-text"
-        elif level_str in ["MEDIUM", "MODERATE"]:
-            bg_class = "medium-bg"
-            text_class = "medium-text"
-            
-        time_str = a.get("time_str", "00:00:00")
-        msg = a.get("message", "Unknown Event")
-        title = msg.split(':', 1)[0] if ':' in msg else f"{level_str} EVENT"
-        desc = msg.split(':', 1)[1].strip() if ':' in msg else msg
-        
-        html += f"""
-        <div class="alert-card {bg_class}">
-            <div class="alert-header">
-                <span class="alert-level {text_class}">[{level_str}]</span>
-                <span class="alert-time">{time_str}</span>
-            </div>
-            <p class="alert-title">{title}</p>
-            <p class="alert-desc">{desc}</p>
-        </div>
-        """
-        
-    html += '</div>'
-    st.markdown(html, unsafe_allow_html=True)
+            card_mod = "high"
+        elif level_str in ("MEDIUM", "MODERATE"):
+            card_mod = "medium"
+
+        time_str = html_escape(str(a.get("time_str", "--:--:--")))
+        type_str = html_escape(str(a.get("alert_type", "event")).upper())
+        msg = html_escape(str(a.get("message", "Unknown event")))
+        row = (
+            f'<span class="lvl lvl-{card_mod}">[{html_escape(level_str)}]</span>'
+            f'<span class="sep">|</span>'
+            f'<span class="tme">{time_str}</span>'
+            f'<span class="sep">|</span>'
+            f'<span class="typ">{type_str}</span>'
+            f'<span class="sep">|</span>'
+            f'<span class="msg">{msg}</span>'
+        )
+        cards_html.append(
+            f'<div class="card card-{card_mod}"><div class="card-row">{row}</div></div>'
+        )
+
+    inner = (
+        '<p class="empty">No active security events.</p>'
+        if not recent
+        else "".join(cards_html)
+    )
+
+    css = f"""
+    html,body{{margin:0;padding:0;background:{BG};color:#e8eaef;
+      font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased;}}
+    .wrap{{padding:12px 14px 16px;box-sizing:border-box;max-height:520px;overflow-y:auto;}}
+    .hdr{{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;
+      padding-bottom:10px;border-bottom:1px solid rgba(0,212,255,0.15);position:sticky;top:0;background:{BG};z-index:2;}}
+    .hdr h2{{font-family:'JetBrains Mono','Consolas',monospace;font-size:11px;font-weight:700;margin:0;
+      text-transform:uppercase;letter-spacing:0.24em;color:{ACCENT};}}
+    .live{{font-family:'JetBrains Mono',monospace;background:rgba(0,255,136,0.12);color:{NORM_C};
+      font-size:9px;padding:4px 10px;border-radius:4px;font-weight:700;letter-spacing:0.15em;border:1px solid rgba(0,255,136,0.35);}}
+    .card{{background:#0d1222;border-radius:8px;padding:11px 12px 11px 14px;margin-bottom:10px;
+      border:1px solid rgba(0,212,255,0.08);border-left:4px solid #5c6578;
+      box-shadow:0 4px 16px rgba(0,0,0,0.35);}}
+    .card-critical{{border-left-color:{CRIT};background:rgba(255,68,68,0.06);}}
+    .card-high{{border-left-color:{HIGH_C};}}
+    .card-medium{{border-left-color:{MED_C};}}
+    .card-low{{border-left-color:{NORM_C};}}
+    .card-row{{font-family:'JetBrains Mono','Consolas',monospace;font-size:10px;line-height:1.55;
+      display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;}}
+    .sep{{color:#4a5366;}}
+    .lvl{{font-weight:700;letter-spacing:0.06em;}}
+    .lvl-critical{{color:{CRIT};}}
+    .lvl-high{{color:{HIGH_C};}}
+    .lvl-medium{{color:{MED_C};}}
+    .lvl-low{{color:{NORM_C};}}
+    .tme{{color:#8b95a8;white-space:nowrap;}}
+    .typ{{color:{ACCENT};font-weight:600;}}
+    .msg{{color:#c8d0e0;flex:1;min-width:140px;}}
+    .empty{{font-size:12px;color:#7d8aa3;margin:12px 0;}}
+    .wrap::-webkit-scrollbar{{width:6px;}}
+    .wrap::-webkit-scrollbar-thumb{{background:rgba(0,212,255,0.25);border-radius:3px;}}
+    """
+
+    html_doc = (
+        '<!DOCTYPE html><html><head><meta charset="utf-8"><style>'
+        + css
+        + '</style></head><body><div class="wrap">'
+        '<div class="hdr"><h2>Active Security Events</h2><span class="live">LIVE</span></div>'
+        + inner
+        + "</div></body></html>"
+    )
+    components.html(html_doc, height=560, scrolling=False)
 
 
-# ─── Senaryo Sidebar ──────────────────────────────────────────
+def _sidebar_model_info(config):
+    st.sidebar.divider()
+    st.sidebar.markdown("#### Model")
+    st.sidebar.markdown(f"**Detector:** `{config['detector']['model']}`")
+    st.sidebar.markdown(f"**Tracker:** `{config['tracker']['type']}`")
+    st.sidebar.markdown(f"**Device:** `{config['detector']['device']}`")
+    st.sidebar.caption(
+        "ML features may be trained on fixed CCTV-style feeds (e.g. UCF); "
+        "rules + GMC are tuned for UAV / aerial motion."
+    )
+
 
 def render_sidebar(config, replay: ReplayManager):
-    st.sidebar.markdown("### ⚙️ Kontrol Paneli")
+    st.sidebar.markdown("### Control Panel")
 
     mode = st.sidebar.radio(
-        "Mod",
-        ["🎥 Canlı Video", "▶ Replay Mode"],
-        key="mode_select"
+        "Mode",
+        ["Live Video", "Replay Mode"],
+        key="mode_select",
     )
 
     st.sidebar.divider()
 
-    if "Replay" in mode:
-        st.sidebar.markdown("#### 📼 Senaryo Seçimi")
+    if mode == "Replay Mode":
+        st.sidebar.markdown("#### Scenario")
         scenarios = replay.list_scenarios()
         scenario_names = [s.name for s in scenarios]
-        sel = st.sidebar.selectbox("Senaryo", scenario_names, key="scenario_sel")
+        sel = st.sidebar.selectbox("Scenario", scenario_names, key="scenario_sel")
         selected = next((s for s in scenarios if s.name == sel), None)
 
         if selected:
-            st.sidebar.markdown(f"*{selected.description}*")
+            st.sidebar.caption(selected.description)
             if not selected.exists:
-                st.sidebar.warning("⚠️ Video dosyası bulunamadı!")
+                st.sidebar.warning("Video file not found.")
                 st.sidebar.markdown(ReplayManager.get_download_instructions())
-                return None, None
-            else:
-                st.sidebar.success("✅ Video hazır")
+                start, stop, clear = render_sidebar_transport()
+                _sidebar_model_info(config)
+                return None, None, start, stop, clear
+            st.sidebar.success("Video ready")
 
+        start, stop, clear = render_sidebar_transport()
+        _sidebar_model_info(config)
         source = selected.video_path if selected else None
-        return source, sel if selected else None
-    else:
-        st.sidebar.markdown("#### 📷 Video Kaynağı")
-        
-        video_dir = os.path.join(ROOT, "data", "test_videos")
-        try:
-            available_videos = [f for f in os.listdir(video_dir) if f.endswith(('.mp4', '.avi', '.mkv', '.mov'))]
-        except FileNotFoundError:
-            available_videos = []
-            
-        src_type = st.sidebar.radio("Kaynak", ["Webcam", "Videolarım (Klasörden Seç)", "Manuel Yol Yaz"])
-        
-        if src_type == "Webcam":
-            return 0, None
-        elif src_type == "Videolarım (Klasörden Seç)":
-            if not available_videos:
-                st.sidebar.warning("data/test_videos klasöründe hiç video bulunamadı.")
-                return None, None
-            selected_file = st.sidebar.selectbox("Test Videoları", available_videos)
-            return os.path.join("data", "test_videos", selected_file), None
-        else:
-            path = st.sidebar.text_input("Video Yolu", "data/test_videos/test.mp4")
-            return path, None
+        return source, sel if selected else None, start, stop, clear
 
-    st.sidebar.divider()
-    st.sidebar.markdown("#### 🧠 Model")
-    st.sidebar.markdown(f"**Detector**: {config['detector']['model']}")
-    st.sidebar.markdown(f"**Tracker**: {config['tracker']['type']}")
-    st.sidebar.markdown(f"**Device**: {config['detector']['device']}")
+    st.sidebar.markdown("#### Video source")
+    video_dir = os.path.join(ROOT, "data", "test_videos")
+    try:
+        available_videos = [
+            f for f in os.listdir(video_dir)
+            if f.endswith((".mp4", ".avi", ".mkv", ".mov"))
+        ]
+    except FileNotFoundError:
+        available_videos = []
+
+    src_type = st.sidebar.radio(
+        "Input",
+        ["Webcam", "Video library", "Manual path"],
+    )
+
+    if src_type == "Webcam":
+        start, stop, clear = render_sidebar_transport()
+        _sidebar_model_info(config)
+        return 0, None, start, stop, clear
+    if src_type == "Video library":
+        if not available_videos:
+            st.sidebar.warning("No videos in `data/test_videos`.")
+            start, stop, clear = render_sidebar_transport()
+            _sidebar_model_info(config)
+            return None, None, start, stop, clear
+        selected_file = st.sidebar.selectbox("Test videos", available_videos)
+        rel_pick = os.path.join("data", "test_videos", selected_file)
+        abs_pick = os.path.normpath(os.path.join(ROOT, rel_pick))
+        start, stop, clear = render_sidebar_transport()
+        _sidebar_model_info(config)
+        return abs_pick, None, start, stop, clear
+
+    raw = st.sidebar.text_input("File path", "data/test_videos/test.mp4").strip()
+    if not raw:
+        start, stop, clear = render_sidebar_transport()
+        _sidebar_model_info(config)
+        return None, None, start, stop, clear
+    path = resolve_user_video_path(raw)
+    start, stop, clear = render_sidebar_transport()
+    _sidebar_model_info(config)
+    return path, None, start, stop, clear
 
 
-# ─── Threat Skoru Grafiği ─────────────────────────────────────
+def render_sidebar_transport():
+    """Start / Stop / Clear — full-width buttons so labels don't wrap in the narrow sidebar."""
+    st.sidebar.markdown(
+        '<p class="section-label" style="margin-bottom:0.35rem;">Session control</p>',
+        unsafe_allow_html=True,
+    )
+    start = st.sidebar.button("Start", use_container_width=True, key="transport_start")
+    stop = st.sidebar.button("Stop", use_container_width=True, key="transport_stop")
+    clear = st.sidebar.button("Clear", use_container_width=True, key="transport_clear")
+    return start, stop, clear
+
 
 def render_threat_chart(history: list):
-    if len(history) < 2:
-        return
-    df = pd.DataFrame(history[-60:], columns=["time", "score"])
+    if history:
+        df = pd.DataFrame(history[-120:], columns=["time", "score"])
+    else:
+        df = pd.DataFrame({"time": [0, 1], "score": [0.0, 0.0]})
+
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df["time"], y=df["score"],
-        fill="tozeroy",
-        line=dict(color="#00dcff", width=2),
-        fillcolor="rgba(0,220,255,0.1)"
-    ))
+    x_vals = df["time"]
+    fig.add_trace(
+        go.Scatter(
+            x=x_vals,
+            y=df["score"],
+            mode="lines",
+            fill="tozeroy",
+            line=dict(color=ACCENT, width=2),
+            fillcolor="rgba(0, 212, 255, 0.18)",
+        )
+    )
+
+    x0 = float(x_vals.iloc[0]) if len(x_vals) else 0
+    x1 = float(x_vals.iloc[-1]) if len(x_vals) else 1
+    fig.add_shape(
+        type="line",
+        x0=x0,
+        y0=0.6,
+        x1=x1,
+        y1=0.6,
+        line=dict(color=CRIT, width=2, dash="dash"),
+    )
+    fig.add_annotation(
+        x=x1,
+        y=0.6,
+        xref="x",
+        yref="y",
+        text="Threshold 0.6",
+        showarrow=False,
+        xanchor="right",
+        yshift=8,
+        font=dict(size=10, color=CRIT, family="JetBrains Mono, monospace"),
+    )
+
     fig.update_layout(
-        height=150,
-        margin=dict(l=0, r=0, t=0, b=0),
+        title=dict(
+            text="THREAT SCORE TIMELINE",
+            font=dict(family="JetBrains Mono, monospace", size=13, color=ACCENT),
+            x=0,
+            xanchor="left",
+        ),
+        height=200,
+        margin=dict(l=48, r=12, t=40, b=36),
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0.2)",
+        plot_bgcolor="rgba(7, 11, 20, 0.85)",
         showlegend=False,
-        xaxis=dict(showticklabels=False, gridcolor="rgba(255,255,255,0.05)"),
-        yaxis=dict(range=[0, 1], tickfont=dict(color="#94a3b8", size=10),
-                   gridcolor="rgba(255,255,255,0.05)")
+        xaxis=dict(
+            title="Frame",
+            gridcolor="rgba(0,212,255,0.06)",
+            tickfont=dict(color="#7d8aa3", size=10),
+            zeroline=False,
+        ),
+        yaxis=dict(
+            range=[0, 1],
+            title="Score",
+            gridcolor="rgba(0,212,255,0.06)",
+            tickfont=dict(color="#7d8aa3", size=10),
+            zeroline=False,
+        ),
     )
     st.plotly_chart(fig, use_container_width=True)
 
 
-# ─── Ana Uygulama ─────────────────────────────────────────────
-
 def main():
     init_state()
     config = load_config()
+    _log_cfg = config.get("logging", {}) or {}
+    _lvl = getattr(
+        logging,
+        str(_log_cfg.get("level", "INFO")).upper(),
+        logging.INFO,
+    )
+    logging.basicConfig(
+        level=_lvl,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        force=True,
+    )
+
     detector, tracker, history, engine, visualizer, alert_sys, replay, ego = init_components(config)
 
     render_header()
 
-    # Sidebar
-    source, scenario_name = render_sidebar(config, replay)
-
-    # Ana layout
-    col_video, col_panel = st.columns([3, 1])
-
-    with col_video:
-        video_placeholder = st.empty()
-        st.markdown("##### 📊 Anlık Tehdit Skoru")
-        chart_placeholder = st.empty()
-
-    with col_panel:
-        st.markdown("##### 🚨 Alert Geçmişi")
-        alert_placeholder = st.empty()
-
-    # Metrik satırı
-    st.divider()
-    metric_placeholder = st.empty()
-
-    # Kontrol butonları
-    btn_col1, btn_col2, btn_col3, _ = st.columns([1, 1, 1, 3])
-    with btn_col1:
-        start = st.button("▶ Başlat", use_container_width=True)
-    with btn_col2:
-        stop = st.button("⏹ Durdur", use_container_width=True)
-    with btn_col3:
-        clear = st.button("🗑 Temizle", use_container_width=True)
+    source, scenario_name, start, stop, clear = render_sidebar(config, replay)
 
     if start:
         st.session_state.running = True
-        history.clear()
-        tracker.reset()
 
     if stop:
         st.session_state.running = False
@@ -520,21 +663,44 @@ def main():
         alert_sys.clear()
         st.session_state.alerts = []
         st.session_state.threat_history = []
+        st.session_state.threat_plot_ema = 0.0
+        st.session_state.pipeline_frame_count = 0
 
-    # ─── Video İşleme Döngüsü ──────────────────────────────
+    col_video, col_panel = st.columns([3, 1])
+
+    with col_video:
+        video_placeholder = st.empty()
+        st.markdown('<p class="section-label">THREAT SCORE TIMELINE</p>', unsafe_allow_html=True)
+        chart_placeholder = st.empty()
+
+    with col_panel:
+        st.markdown('<p class="section-label">Events</p>', unsafe_allow_html=True)
+        alert_placeholder = st.empty()
+
+    st.divider()
+    metric_placeholder = st.empty()
+
     if st.session_state.running and source is not None:
         source_path = source if isinstance(source, str) else source
         if isinstance(source_path, str) and not os.path.isfile(source_path) and source_path != 0:
-            st.error(f"Video bulunamadı: {source_path}")
+            st.error(f"Video not found: {source_path}")
             st.session_state.running = False
         else:
+            src_key = str(source_path) if isinstance(source_path, str) else "webcam:0"
+            if st.session_state.get("last_cap_source") != src_key:
+                st.session_state.video_frame_pos = 0
+                st.session_state.last_cap_source = src_key
+
             cap = cv2.VideoCapture(source_path)
+            if isinstance(source_path, str) and os.path.isfile(source_path):
+                pos = int(st.session_state.get("video_frame_pos", 0) or 0)
+                if pos > 0:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
+
             target_w = config["dashboard"].get("frame_width", 960)
             target_h = config["dashboard"].get("frame_height", 540)
             fps_counter_times = []
 
-            frame_count = 0
-            # Ego-motion kisa vadeli ortalama: HUD/metrikler icin stabil gozukur
             ego_dx_hist, ego_dy_hist = [], []
             if ego is not None:
                 ego.reset()
@@ -543,19 +709,21 @@ def main():
                 ret, frame = cap.read()
                 if not ret:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    st.session_state.video_frame_pos = 0
                     history.clear()
                     tracker.reset()
                     if ego is not None:
                         ego.reset()
                     continue
 
-                frame_count += 1
-                t0 = time.time()
+                if isinstance(source_path, str) and os.path.isfile(source_path):
+                    st.session_state.video_frame_pos = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
 
-                # Boyut ayarla
+                frame_count = st.session_state.pipeline_frame_count + 1
+                st.session_state.pipeline_frame_count = frame_count
+
                 frame = cv2.resize(frame, (target_w, target_h))
 
-                # 0. EGO-MOTION (Drone/IHA). Sabit kamera modunda no-op.
                 H = None
                 ego_dx = ego_dy = 0.0
                 ego_rot_deg = 0.0
@@ -569,52 +737,75 @@ def main():
                     history.apply_camera_motion(H)
                     engine.apply_camera_motion(H)
 
-                # 1. Pipeline
                 detections = detector.detect(frame)
                 tracks = tracker.update(detections, frame, transform=H)
 
                 active_ids = []
                 for t in tracks:
-                    history.update(t.track_id, t.bbox, t.center,
-                                   t.class_id, t.class_name, t.confidence)
+                    history.update(
+                        t.track_id, t.bbox, t.center,
+                        t.class_id, t.class_name, t.confidence,
+                    )
                     active_ids.append(t.track_id)
                 history.mark_missing(active_ids)
 
-                # Zone overlay (dinamik capa isaretleriyle birlikte)
                 if engine.zone_detector:
                     frame = engine.zone_detector.draw_zones(frame)
 
                 alerts, per_track = engine.process(history, target_w, target_h)
                 if alerts:
-                    alert_sys.add_all(alerts, frame_count)
+                    alert_sys.add_all(alerts, st.session_state.pipeline_frame_count)
 
-                # FPS
                 fps_counter_times.append(time.time())
                 fps_counter_times = fps_counter_times[-30:]
-                fps = (len(fps_counter_times)-1)/max(fps_counter_times[-1]-fps_counter_times[0], 1e-6) if len(fps_counter_times) > 1 else 0
+                fps = (
+                    (len(fps_counter_times) - 1)
+                    / max(fps_counter_times[-1] - fps_counter_times[0], 1e-6)
+                    if len(fps_counter_times) > 1
+                    else 0
+                )
 
-                # Ego-motion ortalamasi (son ~15 frame) — HUD titremesin diye
-                ego_dx_hist.append(ego_dx); ego_dy_hist.append(ego_dy)
-                ego_dx_hist = ego_dx_hist[-15:]; ego_dy_hist = ego_dy_hist[-15:]
+                ego_dx_hist.append(ego_dx)
+                ego_dy_hist.append(ego_dy)
+                ego_dx_hist = ego_dx_hist[-15:]
+                ego_dy_hist = ego_dy_hist[-15:]
                 ego_dx_avg = float(np.mean(ego_dx_hist)) if ego_dx_hist else 0.0
                 ego_dy_avg = float(np.mean(ego_dy_hist)) if ego_dy_hist else 0.0
 
                 extra = {
-                    "scenario":    scenario_name,
-                    "gmc_active":  ego is not None,
-                    "ego_dx":      ego_dx_avg,
-                    "ego_dy":      ego_dy_avg,
+                    "scenario": scenario_name,
+                    "gmc_active": ego is not None,
+                    "ego_dx": ego_dx_avg,
+                    "ego_dy": ego_dy_avg,
                     "ego_rot_deg": ego_rot_deg,
-                    "ego_scale":   ego_scale,
+                    "ego_scale": ego_scale,
                 }
                 frame_out = visualizer.render(frame, history, alerts, per_track, extra)
 
-                # Threat history
-                max_score = max((v.get("threat_score", 0) for v in per_track.values()), default=0)
-                st.session_state.threat_history.append((frame_count, max_score))
+                max_rule = max(
+                    (float(v.get("rule_score", 0) or 0) for v in per_track.values()),
+                    default=0.0,
+                )
+                max_threat = max(
+                    (float(v.get("threat_score", 0) or 0) for v in per_track.values()),
+                    default=0.0,
+                )
+                max_alert = max(
+                    (float(getattr(a, "score", 0) or 0) for a in alerts),
+                    default=0.0,
+                )
+                instant = max(max_rule, max_alert, max_threat)
+                prev_plot = float(st.session_state.get("threat_plot_ema", 0.0))
+                if instant >= prev_plot:
+                    plot_val = instant
+                else:
+                    plot_val = 0.88 * prev_plot + 0.12 * instant
+                st.session_state.threat_plot_ema = plot_val
+                st.session_state.threat_history.append(
+                    (st.session_state.pipeline_frame_count, plot_val),
+                )
                 st.session_state.threat_history = st.session_state.threat_history[-120:]
 
-                # Streamlit güncelle
                 frame_rgb = cv2.cvtColor(frame_out, cv2.COLOR_BGR2RGB)
                 video_placeholder.image(frame_rgb, use_container_width=True)
 
@@ -631,19 +822,31 @@ def main():
             alert_sys.force_save()
 
     elif not st.session_state.running:
-        # Bekleme ekranı
         placeholder_img = np.zeros((540, 960, 3), dtype=np.uint8)
-        cv2.putText(placeholder_img, "Baslat butonuna basin...", (300, 270),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (80, 80, 100), 2)
+        draw_text_bgr(
+            placeholder_img,
+            "Press Start for aerial surveillance…",
+            (200, 280),
+            20,
+            (90, 96, 110),
+            stroke_width=1,
+            stroke_color=(10, 14, 26),
+        )
         video_placeholder.image(placeholder_img, channels="BGR", use_container_width=True)
+
+        with chart_placeholder:
+            render_threat_chart(st.session_state.threat_history)
 
         with alert_placeholder:
             render_alerts(alert_sys)
 
         with metric_placeholder:
-            render_metrics(alert_sys, 0.0, 0,
-                           extra_info={"gmc_active": ego is not None,
-                                       "ego_dx": 0.0, "ego_dy": 0.0})
+            render_metrics(
+                alert_sys,
+                0.0,
+                0,
+                extra_info={"gmc_active": ego is not None, "ego_dx": 0.0, "ego_dy": 0.0},
+            )
 
 
 if __name__ == "__main__":
