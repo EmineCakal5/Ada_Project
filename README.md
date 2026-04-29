@@ -219,7 +219,4 @@ Ada_Project/
 
 ## Geliştiriciler
 
-| İsim | GitHub |
-|------|--------|
-| Azra Karakaya | [@azrakarakaya1](https://github.com/azrakarakaya1) |
-| Emine Cakal | [@EmineCakal5](https://github.com/EmineCakal5) |
+[Azra Karakaya](https://github.com/azrakarakaya1) · [Emine Cakal](https://github.com/EmineCakal5)
