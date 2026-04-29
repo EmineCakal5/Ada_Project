@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 OBJECT_CLASS_IDS = {24, 26, 28, 63, 56, 73}  # backpack, handbag, suitcase, laptop, chair, book
 OBJECT_CLASS_NAMES = {"backpack", "handbag", "suitcase", "laptop", "chair", "book",
                       "bottle", "phone", "keyboard"}
-PERSON_CLASS_NAMES = {"person"}
+
+# Nesneye "sahip" olabilecek sınıflar: kişiler ve araçlar.
+# Araç senaryosu: bir araç şüpheli cisim bırakıp uzaklaşabilir.
+OWNER_CLASS_NAMES = {"person", "car", "truck", "van", "bus", "motorbike", "bicycle"}
 
 
 class AbandonedObjectDetector:
@@ -60,9 +63,9 @@ class AbandonedObjectDetector:
         """
         alerts = []
 
-        # Nesneleri ve kişileri ayır
+        # Nesneleri ve sahip adaylarını ayır (kişi + araç)
         objects = [t for t in tracks if t.class_name in OBJECT_CLASS_NAMES]
-        persons = [t for t in tracks if t.class_name in PERSON_CLASS_NAMES]
+        persons = [t for t in tracks if t.class_name in OWNER_CLASS_NAMES]
 
         active_object_ids = {t.track_id for t in objects}
 
@@ -118,7 +121,7 @@ class AbandonedObjectDetector:
                         "score": min(elapsed / (self.confirm_seconds * 3), 1.0),
                         "alert_msg": (
                             f"🎒 TERK EDİLMİŞ NESNE: {obj.class_name} #{tid} "
-                            f"{int(elapsed)}s boyunca sahipsiz"
+                            f"{int(elapsed)}s boyunca sahipsiz (kişi veya araç uzaklaştı)"
                         )
                     }
                     alerts.append(alert)
