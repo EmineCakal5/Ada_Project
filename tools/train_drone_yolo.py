@@ -116,7 +116,7 @@ def _install_drone_albumentations() -> None:
     ]
 
     # --- Ultralytics Albumentations sinifini monkey-patch ---
-    def _drone_init(self, p: float = 1.0):
+    def _drone_init(self, p: float = 1.0, transforms=None, **kwargs):
         self.p = p
         self.transform = None
         # Ultralytics'in yeni surumleri bu bayragi bekliyor (spatial transform
