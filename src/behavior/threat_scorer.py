@@ -67,10 +67,12 @@ class ThreatScorer:
 
     def __init__(self, config: dict):
         weights_cfg = config["behavior"]["threat_scorer"]["weights"]
-        self.w_zone      = weights_cfg.get("zone_violation",    0.35)
-        self.w_loitering = weights_cfg.get("loitering",         0.25)
-        self.w_abandoned = weights_cfg.get("abandoned_object",  0.30)
-        self.w_velocity  = weights_cfg.get("velocity_anomaly",  0.10)
+        self.w_zone           = weights_cfg.get("zone_violation",        0.25)
+        self.w_loitering      = weights_cfg.get("loitering",             0.20)
+        self.w_abandoned      = weights_cfg.get("abandoned_object",      0.25)
+        self.w_velocity       = weights_cfg.get("velocity_anomaly",      0.10)
+        self.w_reconnaissance = weights_cfg.get("reconnaissance",        0.10)
+        self.w_coordinated    = weights_cfg.get("coordinated_movement",  0.10)
 
         logger.info(f"ThreatScorer başlatıldı: weights={weights_cfg}")
 
@@ -79,7 +81,9 @@ class ThreatScorer:
         track: TrackInfo,
         zone_result: Dict,
         loitering_result: Dict,
-        abandoned_score: float = 0.0
+        abandoned_score: float = 0.0,
+        reconnaissance_score: float = 0.0,
+        coordinated_score: float = 0.0,
     ) -> Tuple[np.ndarray, float, str]:
         """
         Tehdit skoru ve feature vektörü hesapla.
@@ -87,7 +91,10 @@ class ThreatScorer:
         Returns:
             (feature_vector, threat_score, threat_level)
         """
-        fv = self.build_feature_vector(track, zone_result, loitering_result, abandoned_score)
+        fv = self.build_feature_vector(
+            track, zone_result, loitering_result,
+            abandoned_score, reconnaissance_score, coordinated_score,
+        )
         score = self.weighted_score(fv, zone_result, loitering_result, abandoned_score, track)
         level = self.score_to_level(score)
         return fv, score, level
@@ -97,21 +104,37 @@ class ThreatScorer:
         track: TrackInfo,
         zone_result: Dict,
         loitering_result: Dict,
-        abandoned_score: float
+        abandoned_score: float,
+        reconnaissance_score: float = 0.0,
+        coordinated_score: float = 0.0,
     ) -> np.ndarray:
-        """8-boyutlu feature vektörü üret."""
+        """10-boyutlu feature vektörü üret.
+
+        [0] zone_violation_score
+        [1] dwell_time_normalized
+        [2] velocity_magnitude
+        [3] trajectory_variance
+        [4] loitering_score
+        [5] abandoned_object_score
+        [6] time_of_day_encoded
+        [7] object_class_risk
+        [8] reconnaissance_score
+        [9] coordinated_movement_score
+        """
         import datetime
         hour = datetime.datetime.now().hour
 
         fv = np.array([
-            float(zone_result.get("violation_score", 0.0)),                          # [0] zone
-            min(track.dwell_time / self.MAX_DWELL_SECONDS, 1.0),                     # [1] dwell
-            min(track.velocity / self.MAX_VELOCITY_PX, 1.0),                         # [2] velocity
-            min(track.trajectory_variance / self.MAX_VARIANCE, 1.0),                 # [3] variance
-            float(loitering_result.get("loitering_score", 0.0)),                     # [4] loitering
-            float(abandoned_score),                                                   # [5] abandoned
-            math.sin(hour * 2 * math.pi / 24),                                      # [6] time-of-day
-            self.CLASS_RISK.get(track.class_name, self.CLASS_RISK["default"]),       # [7] class risk
+            float(zone_result.get("violation_score", 0.0)),                    # [0] zone
+            min(track.dwell_time / self.MAX_DWELL_SECONDS, 1.0),               # [1] dwell
+            min(track.velocity / self.MAX_VELOCITY_PX, 1.0),                   # [2] velocity
+            min(track.trajectory_variance / self.MAX_VARIANCE, 1.0),           # [3] variance
+            float(loitering_result.get("loitering_score", 0.0)),               # [4] loitering
+            float(abandoned_score),                                             # [5] abandoned
+            math.sin(hour * 2 * math.pi / 24),                                # [6] time-of-day
+            self.CLASS_RISK.get(track.class_name, self.CLASS_RISK["default"]), # [7] class risk
+            float(reconnaissance_score),                                        # [8] reconnaissance
+            float(coordinated_score),                                           # [9] coordinated
         ], dtype=np.float32)
 
         return fv
@@ -125,16 +148,13 @@ class ThreatScorer:
         track: TrackInfo
     ) -> float:
         """Ağırlıklı kural tabanlı skor (MLP yokken fallback)."""
-        zone_score  = fv[0]
-        loiter_score = fv[4]
-        abandon_score = fv[5]
-        velocity_score = fv[2]
-
         score = (
-            self.w_zone      * zone_score    +
-            self.w_loitering * loiter_score  +
-            self.w_abandoned * abandon_score +
-            self.w_velocity  * velocity_score
+            self.w_zone          * fv[0] +   # zone violation
+            self.w_loitering     * fv[4] +   # loitering
+            self.w_abandoned     * fv[5] +   # abandoned
+            self.w_velocity      * fv[2] +   # velocity anomaly
+            self.w_reconnaissance * fv[8] +  # reconnaissance
+            self.w_coordinated   * fv[9]     # coordinated movement
         )
         return float(np.clip(score, 0.0, 1.0))
 

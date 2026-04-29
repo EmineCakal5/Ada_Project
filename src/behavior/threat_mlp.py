@@ -27,10 +27,10 @@ LABELS = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
 class ThreatMLP(nn.Module):
     """
     2-3 katmanlı MLP sınıflandırıcı.
-    Input: 8 boyut feature vektörü
+    Input: 10 boyut feature vektörü
     Output: 4 sınıf (LOW/MED/HIGH/CRITICAL)
 
-    Mimari: 8 → 32 → 16 → 4
+    Mimari: 10 → 32 → 16 → 4
     """
 
     def __init__(self, input_dim: int = 8, hidden_dims: list = None, output_dim: int = 4):
@@ -63,7 +63,7 @@ def generate_synthetic_data(n_samples: int = 500, seed: int = 42) -> Tuple[np.nd
     """
     Kural motoru mantığıyla tutarlı sentetik eğitim verisi üret.
 
-    Feature vektörü (8 boyut):
+    Feature vektörü (10 boyut):
         [0] zone_violation_score
         [1] dwell_time_normalized
         [2] velocity_magnitude
@@ -72,6 +72,8 @@ def generate_synthetic_data(n_samples: int = 500, seed: int = 42) -> Tuple[np.nd
         [5] abandoned_object_score
         [6] time_of_day_sin
         [7] class_risk
+        [8] reconnaissance_score
+        [9] coordinated_movement_score
 
     Label: 0=LOW, 1=MEDIUM, 2=HIGH, 3=CRITICAL
     """
@@ -83,34 +85,42 @@ def generate_synthetic_data(n_samples: int = 500, seed: int = 42) -> Tuple[np.nd
 
     # LOW — normal davranış
     for _ in range(per_class):
-        x = rng.uniform(0, 0.3, 8)
+        x = rng.uniform(0, 0.3, 10)
         x[0] = rng.uniform(0, 0.1)    # zone: safe
         x[4] = rng.uniform(0, 0.2)    # loitering: none
         x[5] = rng.uniform(0, 0.1)    # abandoned: none
+        x[8] = rng.uniform(0, 0.1)    # reconnaissance: none
+        x[9] = rng.uniform(0, 0.1)    # coordinated: none
         X.append(x); y.append(0)
 
     # MEDIUM — şüpheli ama düşük risk
     for _ in range(per_class):
-        x = rng.uniform(0, 0.5, 8)
+        x = rng.uniform(0, 0.5, 10)
         x[0] = rng.uniform(0.1, 0.4)
         x[4] = rng.uniform(0.2, 0.5)
         x[5] = rng.uniform(0.1, 0.4)
+        x[8] = rng.uniform(0.2, 0.5)
+        x[9] = rng.uniform(0.1, 0.4)
         X.append(x); y.append(1)
 
     # HIGH — tehlikeli davranış
     for _ in range(per_class):
-        x = rng.uniform(0.3, 0.8, 8)
+        x = rng.uniform(0.3, 0.8, 10)
         x[0] = rng.uniform(0.5, 1.0)   # zone violation
         x[4] = rng.uniform(0.5, 0.9)   # loitering
         x[5] = rng.uniform(0.4, 0.8)   # abandoned
+        x[8] = rng.uniform(0.5, 0.9)   # reconnaissance
+        x[9] = rng.uniform(0.4, 0.8)   # coordinated
         X.append(x); y.append(2)
 
     # CRITICAL — çok yüksek tehdit
     for _ in range(per_class):
-        x = rng.uniform(0.6, 1.0, 8)
+        x = rng.uniform(0.6, 1.0, 10)
         x[0] = rng.uniform(0.8, 1.0)
         x[4] = rng.uniform(0.8, 1.0)
         x[5] = rng.uniform(0.7, 1.0)
+        x[8] = rng.uniform(0.7, 1.0)
+        x[9] = rng.uniform(0.6, 1.0)
         X.append(x); y.append(3)
 
     X = np.array(X, dtype=np.float32)
