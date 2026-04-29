@@ -45,24 +45,38 @@ behavior:
     owner_distance: 150        # Piksel: sahibi bu kadar uzaklasirsa nesne "terk edildi"
     confirm_seconds: 10        # Kac saniye sonra alarm verilir
 
+  reconnaissance:
+    min_time_seconds: 30        # Kaç saniye sonra keşif analizi başlar
+    efficiency_threshold: 0.35  # Path efficiency < bu değer → şüpheli tarama
+    min_coverage_px2: 8000      # Minimum kapsama alanı (piksel²)
+    person_only: true           # Sadece kişi sınıfında uygula
+
+  coordinated_movement:
+    velocity_similarity_threshold: 0.85  # Cosine benzerlik eşiği
+    proximity_px: 200                    # Maksimum kişiler arası mesafe (piksel)
+    min_duration_seconds: 5.0            # Kaç saniye sürmeli
+    min_velocity_px: 3.0                 # Hareketsiz kişileri hariç tut
+
   threat_scorer:
     weights:
-      zone_violation: 0.35
-      loitering: 0.25
-      abandoned_object: 0.30
+      zone_violation: 0.25
+      loitering: 0.20
+      abandoned_object: 0.25
       velocity_anomaly: 0.10
+      reconnaissance: 0.10
+      coordinated_movement: 0.10
 
 # ─── MLP Siniflandirici ───────────────────────────────────
 mlp:
-  input_dim: 8
+  input_dim: 10               # 8 temel + keşif + koordineli hareket
   hidden_dims: [32, 16]
   output_dim: 4               # LOW / MEDIUM / HIGH / CRITICAL
   model_path: "models/weights/threat_mlp.pt"
-  threshold_train: 200        # Sentetik ornek sayisi
+  threshold_train: 500        # Sentetik ornek sayisi
 
 # ─── Dashboard ────────────────────────────────────────────
 dashboard:
-  title: "Davranissal Guvenlik Analiz Sistemi"
+  title: "Derin Ogrenme ve Gercek Zamanli Davranissal Analiz ile Guvenlik Ihlali Tespiti"
   port: 8501
   frame_width: 960
   frame_height: 540
