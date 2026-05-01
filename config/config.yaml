@@ -4,7 +4,7 @@
 
 # ─── Detector ─────────────────────────────────────────────
 detector:
-  model: "yolov8s.pt"          # yolov8n / yolov8s / yolov8m
+  model: "models/weights/yolov8s_drone.pt"  # VisDrone fine-tuned
   confidence: 0.65
   iou_threshold: 0.45
   device: "cpu"                 # "cpu" veya "cuda"
