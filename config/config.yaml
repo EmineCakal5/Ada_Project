@@ -42,7 +42,7 @@ behavior:
   # istege bagli. Yoksa sadece `points` (piksel, ref cozunurluk) kullanilir.
 
   loitering:
-    threshold_seconds: 60      # Kac saniyeden fazla bekleme anormal
+    threshold_seconds: 20      # Test: 20s (normal: 60s)
     min_displacement: 50       # Piksel: bu altinda hareket "duruyor" sayilir
 
   abandoned_object:

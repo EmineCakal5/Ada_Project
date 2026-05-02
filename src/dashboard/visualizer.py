@@ -150,12 +150,12 @@ class Visualizer:
         cv2.line(frame, (0, bar_h), (w, bar_h), HUD_NEON, 1, cv2.LINE_AA)
 
         fz_med, fz_sm = 17, 12
-        title_txt = "[ SENTINEL UAV ] " + str(self.title)
+        title_txt = str(self.title)
         draw_text_bgr(frame, title_txt, (10, 26), fz_med, HUD_NEON,
                       stroke_width=1, stroke_color=(8, 10, 18))
 
         if extra_info and extra_info.get("scenario"):
-            scn = f"> SCENARIO: {extra_info['scenario']}"
+            scn = f"> {extra_info['scenario']}"
             tw, _ = _text_size(scn, fz_med)
             draw_text_bgr(frame, scn, (w // 2 - tw // 2, 26), fz_med, HUD_CYBER,
                           stroke_width=1, stroke_color=(8, 10, 18))

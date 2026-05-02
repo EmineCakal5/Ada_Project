@@ -29,7 +29,10 @@ class Scenario:
 
     @property
     def exists(self) -> bool:
-        return os.path.isfile(self.video_path)
+        if os.path.isabs(self.video_path):
+            return os.path.isfile(self.video_path)
+        root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        return os.path.isfile(os.path.join(root, self.video_path))
 
     def to_dict(self) -> dict:
         return {
@@ -56,22 +59,39 @@ class ReplayManager:
     # Gömülü varsayılan senaryolar (video yoksa bilgi ver)
     DEFAULT_SCENARIOS = [
         {
-            "name": "Scenario 1 — Zone violation",
-            "video_path": "data/scenarios/scenario_zone_violation.mp4",
-            "description": "A person enters a restricted zone; the system raises an alert.",
-            "tags": ["zone_violation", "person"]
+            "name": "Senaryo 1 — Bölge İhlali",
+            "video_path": "data/test_videos/bolge_ihlali.mp4",
+            "description": "Drone görüntüsünde kişi/nesne önceden tanımlı yasak bölgeye giriyor; sistem anında HIGH seviye alarm üretiyor.",
+            "tags": ["zone_violation", "person"],
+            "duration_s": 37.0
         },
         {
-            "name": "Scenario 2 — Abandoned object",
-            "video_path": "data/scenarios/scenario_abandoned.mp4",
-            "description": "Someone leaves a bag and walks away; the system flags abandonment.",
-            "tags": ["abandoned_object", "backpack"]
+            "name": "Senaryo 2 — Terk Edilmiş Nesne",
+            "video_path": "data/test_videos/terk_edilmis_nesne.mp4",
+            "description": "Kişi çantasını bırakıp uzaklaşıyor; sahibinden ayrılan nesne 10 saniye hareketsiz kaldıktan sonra alarm tetikleniyor.",
+            "tags": ["abandoned_object", "backpack"],
+            "duration_s": 104.0
         },
         {
-            "name": "Scenario 3 — Loitering",
-            "video_path": "data/scenarios/scenario_loitering.mp4",
-            "description": "A person remains stationary 60+ seconds; the system triggers loitering logic.",
-            "tags": ["loitering", "person"]
+            "name": "Senaryo 3 — Anormal Bekleme",
+            "video_path": "data/test_videos/anormal_bekleme.mp4",
+            "description": "Kişi aynı noktada 20+ saniye bekliyor (loitering); MEDIUM seviye loitering alarmı devreye giriyor.",
+            "tags": ["loitering", "person"],
+            "duration_s": 29.0
+        },
+        {
+            "name": "Senaryo 4 — Keşif Davranışı",
+            "video_path": "data/test_videos/kesif_davranisi.mp4",
+            "description": "Şüpheli kişi geniş alanda sistematik hareket ediyor; düşük yol verimliliği (< 0.35) ile keşif davranışı tespit ediliyor.",
+            "tags": ["reconnaissance", "person"],
+            "duration_s": 135.0
+        },
+        {
+            "name": "Senaryo 5 — Koordineli Hareket",
+            "video_path": "data/test_videos/koordineli_hareket.mp4",
+            "description": "İki veya daha fazla kişi uyumlu hız vektörleriyle (cos > 0.85) 5+ saniye hareket ediyor; koordineli tehdit işaretleniyor.",
+            "tags": ["coordinated_movement", "person"],
+            "duration_s": 60.0
         },
     ]
 
@@ -89,12 +109,11 @@ class ReplayManager:
         logger.info(f"ReplayManager: {len(self._scenarios)} senaryo yüklendi")
 
     def _save_scenario_manifest(self):
-        """Varsayılan senaryo manifest'ini oluştur."""
+        """Varsayılan senaryo manifest'ini oluştur (her seferinde DEFAULT ile senkronize et)."""
         manifest_path = os.path.join(self.scenarios_dir, "scenarios.json")
-        if not os.path.exists(manifest_path):
-            with open(manifest_path, "w", encoding="utf-8") as f:
-                json.dump(self.DEFAULT_SCENARIOS, f, ensure_ascii=False, indent=2)
-            logger.info(f"Senaryo manifest oluşturuldu: {manifest_path}")
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(self.DEFAULT_SCENARIOS, f, ensure_ascii=False, indent=2)
+        logger.info(f"Senaryo manifest güncellendi: {manifest_path}")
 
     def _load_scenarios(self):
         """Senaryo manifest'ini yükle."""
@@ -161,24 +180,13 @@ class ReplayManager:
 
     @staticmethod
     def get_download_instructions() -> str:
-        """How to add scenario videos."""
         return """
-## Add test videos
+## Test videosu eksik
 
-Replay scenarios need real surveillance-style footage.
-
-### Option A — Download with yt-dlp
-```bash
-pip install yt-dlp
-yt-dlp "https://youtube.com/..." -o "data/scenarios/scenario_zone_violation.mp4"
-```
-
-### Option B — Stock footage
-- [Pexels — surveillance](https://www.pexels.com/search/videos/security%20camera/)
-- [Pixabay — CCTV](https://pixabay.com/videos/search/security%20camera/)
-
-Place files as:
-- `data/scenarios/scenario_zone_violation.mp4`
-- `data/scenarios/scenario_abandoned.mp4`
-- `data/scenarios/scenario_loitering.mp4`
+Videoları `data/test_videos/` klasörüne şu isimlerle ekleyin:
+- `bolge_ihlali.mp4`
+- `terk_edilmis_nesne.mp4`
+- `anormal_bekleme.mp4`
+- `kesif_davranisi.mp4`
+- `koordineli_hareket.mp4`
 """
